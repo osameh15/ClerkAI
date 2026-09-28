@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/common.schema.json",
+  "title": "Clerk Common Definitions",
+  "description": "Shared primitive definitions referenced by other Clerk schemas and by the OpenAPI document. Version 1.0.0.",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Lowercase hyphenated UUID. Business identifiers are UUIDv7."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp in UTC."
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 calendar date (Gregorian)."
+    },
+    "moduleKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 128,
+      "examples": ["business.meeting-minutes", "construction.site-report"]
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "examples": ["1.0.0", "2.3.1-beta.1"]
+    },
+    "semverRange": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "SemVer range expression (npm-style), e.g. '^1.2.0', '>=1.0.0 <2.0.0'.",
+      "examples": ["^1.0.0", ">=1.0.0 <2.0.0"]
+    },
+    "versionedRef": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._/-]*@(?:\\^|~|>=)?[0-9][0-9A-Za-z.+-]*$",
+      "description": "Reference to a versioned definition: '<key>@<version or range>'.",
+      "examples": ["meeting.action-extraction@2.3.1", "business.meeting-minutes/minutes@1.0.0"]
+    },
+    "permissionKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$",
+      "maxLength": 160,
+      "examples": ["artifacts.export", "construction.site-report.approve"]
+    },
+    "entitlementKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z0-9][a-z0-9-]*)+$",
+      "maxLength": 160,
+      "examples": ["module.business.meeting-minutes", "export.docx", "audit.log"]
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*){1,3}$",
+      "examples": ["job.submitted", "source.file.uploaded"]
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$",
+      "examples": ["en", "fa", "fa-IR"]
+    },
+    "localizedString": {
+      "type": "object",
+      "description": "Map of locale to text. 'en' is required as the fallback.",
+      "propertyNames": { "$ref": "#/$defs/locale" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 4000 },
+      "required": ["en"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Raw confidence in [0,1]. Not assumed calibrated."
+    },
+    "confidenceBand": {
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+    "reviewState": {
+      "type": "string",
+      "enum": ["ai_generated", "human_confirmed", "human_modified", "rejected", "unresolved"],
+      "description": "Human correction state (Blueprint 10.2)."
+    },
+    "origin": {
+      "type": "string",
+      "enum": ["ai", "human", "system"]
+    },
+    "actor": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["user", "api_key", "system", "ai", "platform_admin", "remote_module"]
+        },
+        "id": {
+          "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }]
+        },
+        "display": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": ["audio", "video", "image", "document", "spreadsheet", "presentation", "text"]
+    },
+    "extractionKind": {
+      "type": "string",
+      "enum": [
+        "metadata",
+        "normalized_audio",
+        "transcript",
+        "diarization",
+        "language",
+        "frames",
+        "vision_caption",
+        "ocr",
+        "handwriting_ocr",
+        "layout",
+        "tables",
+        "text",
+        "slides",
+        "normalized_content",
+        "embeddings"
+      ]
+    },
+    "moneyMicros": {
+      "type": "object",
+      "required": ["amount_micros", "currency"],
+      "additionalProperties": false,
+      "properties": {
+        "amount_micros": { "type": "integer" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "pageInfo": {
+      "type": "object",
+      "required": ["has_more"],
+      "additionalProperties": false,
+      "properties": {
+        "next_cursor": { "type": ["string", "null"], "maxLength": 512 },
+        "has_more": { "type": "boolean" }
+      }
+    }
+  }
+}

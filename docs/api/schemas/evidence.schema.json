@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/evidence.schema.json",
+  "title": "Clerk Evidence Link",
+  "description": "Structured pointer from a Knowledge item or Artifact field to a Source location. Evidence is data, not UI decoration (ADR-011). See docs/knowledge/evidence-model.md.",
+  "type": "object",
+  "required": ["id", "target", "source_id", "extraction_id", "pointer", "support", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/uuid" },
+    "target": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["entity", "relation", "artifact_field"] },
+        "id": { "$ref": "common.schema.json#/$defs/uuid" },
+        "path": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "JSON Pointer into the entity attributes or artifact content, e.g. '/attributes/deadline' or '/body/actions/3/owner'."
+        }
+      }
+    },
+    "source_id": { "$ref": "common.schema.json#/$defs/uuid" },
+    "extraction_id": { "$ref": "common.schema.json#/$defs/uuid" },
+    "chunk_id": {
+      "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+    },
+    "pointer": {
+      "description": "Location inside the Source, discriminated by 'type'.",
+      "oneOf": [
+        { "$ref": "#/$defs/timeRangePointer" },
+        { "$ref": "#/$defs/pagePointer" },
+        { "$ref": "#/$defs/boundingBoxPointer" },
+        { "$ref": "#/$defs/textSpanPointer" },
+        { "$ref": "#/$defs/chunkPointer" }
+      ]
+    },
+    "quote": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Short verbatim excerpt of the supporting content, for display. Subject to retention of derived content."
+    },
+    "support": {
+      "type": "string",
+      "enum": ["supports", "contradicts", "context"]
+    },
+    "confidence": { "$ref": "common.schema.json#/$defs/confidence" },
+    "status": {
+      "type": "string",
+      "enum": ["active", "superseded", "source_unavailable"]
+    },
+    "created_by": { "$ref": "common.schema.json#/$defs/actor" },
+    "ai_execution_id": {
+      "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+  },
+  "$defs": {
+    "timeRangePointer": {
+      "type": "object",
+      "required": ["type", "start_ms", "end_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "time_range" },
+        "media": { "type": "string", "enum": ["audio", "video"] },
+        "start_ms": { "type": "integer", "minimum": 0 },
+        "end_ms": { "type": "integer", "minimum": 0 },
+        "speaker_label": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "pagePointer": {
+      "type": "object",
+      "required": ["type", "page"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "page" },
+        "page": { "type": "integer", "minimum": 1 },
+        "slide": { "type": "integer", "minimum": 1 },
+        "sheet": { "type": "string", "maxLength": 128 },
+        "cell_range": { "type": "string", "maxLength": 64, "examples": ["B2:D9"] }
+      }
+    },
+    "boundingBoxPointer": {
+      "type": "object",
+      "required": ["type", "x", "y", "width", "height"],
+      "additionalProperties": false,
+      "description": "Normalized coordinates in [0,1] relative to the page/image/frame, origin top-left.",
+      "properties": {
+        "type": { "const": "bbox" },
+        "page": { "type": "integer", "minimum": 1 },
+        "frame_ms": { "type": "integer", "minimum": 0, "description": "For video frames." },
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width": { "type": "number", "minimum": 0, "maximum": 1 },
+        "height": { "type": "number", "minimum": 0, "maximum": 1 },
+        "region_label": { "type": "string", "maxLength": 64, "examples": ["#3"] }
+      }
+    },
+    "textSpanPointer": {
+      "type": "object",
+      "required": ["type", "start", "end"],
+      "additionalProperties": false,
+      "description": "Unicode code point offsets into the extraction's normalized text (end exclusive).",
+      "properties": {
+        "type": { "const": "text_span" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "page": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "chunkPointer": {
+      "type": "object",
+      "required": ["type", "chunk_id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "chunk" },
+        "chunk_id": { "$ref": "common.schema.json#/$defs/uuid" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "id": "0192f4a8-aaaa-7000-8000-000000000001",
+      "target": { "type": "entity", "id": "0192f4a8-bbbb-7000-8000-000000000002", "path": "/attributes/deadline" },
+      "source_id": "0192f4a8-cccc-7000-8000-000000000003",
+      "extraction_id": "0192f4a8-dddd-7000-8000-000000000004",
+      "chunk_id": null,
+      "pointer": { "type": "time_range", "media": "audio", "start_ms": 1272000, "end_ms": 1278000, "speaker_label": "S2" },
+      "quote": "…تا دوازدهم مهر نقشه‌ها ارسال شود…",
+      "support": "supports",
+      "confidence": 0.91,
+      "status": "active"
+    }
+  ]
+}

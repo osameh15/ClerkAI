@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/event-envelope.schema.json",
+  "title": "Clerk Domain Event Envelope",
+  "description": "Versioned envelope for all domain events published through the Transactional Outbox and delivered to webhooks. Baseline from Blueprint 8.2. The 'data' payload has its own schema per (event_type, version).",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "version",
+    "occurred_at",
+    "organization_id",
+    "actor_id",
+    "correlation_id",
+    "causation_id",
+    "data"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "$ref": "common.schema.json#/$defs/uuid",
+      "description": "UUIDv7; unique per event; consumers deduplicate on it."
+    },
+    "event_type": {
+      "$ref": "common.schema.json#/$defs/eventType"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version of 'data' for this event_type."
+    },
+    "occurred_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "organization_id": {
+      "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }],
+      "description": "Tenant. Null only for platform-scoped events."
+    },
+    "actor_id": {
+      "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }],
+      "description": "Blueprint-compatible actor identifier; see 'actor' for type."
+    },
+    "actor": {
+      "$ref": "common.schema.json#/$defs/actor"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "causation_id": {
+      "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 64 }, { "type": "null" }]
+    },
+    "subject": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "pattern": "^[a-z][a-z_]*$" },
+        "id": { "$ref": "common.schema.json#/$defs/uuid" }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "traceparent": { "type": "string", "maxLength": 128 },
+        "tracestate": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "data": {
+      "type": "object",
+      "description": "Event-specific payload. Contains identifiers and small facts only; never customer content."
+    }
+  },
+  "examples": [
+    {
+      "event_id": "0192f4a8-7c1e-7a3b-9d2e-4b5c6d7e8f90",
+      "event_type": "artifact.generated",
+      "version": 1,
+      "occurred_at": "2026-09-28T10:15:30.123Z",
+      "organization_id": "0192f4a8-0000-7000-8000-000000000001",
+      "actor_id": null,
+      "actor": { "type": "system", "id": null },
+      "correlation_id": "0192f4a8-1111-7000-8000-000000000002",
+      "causation_id": "0192f4a8-2222-7000-8000-000000000003",
+      "subject": { "type": "artifact", "id": "0192f4a8-3333-7000-8000-000000000004" },
+      "data": {
+        "artifact_id": "0192f4a8-3333-7000-8000-000000000004",
+        "version_id": "0192f4a8-4444-7000-8000-000000000005",
+        "job_id": "0192f4a8-5555-7000-8000-000000000006",
+        "module_key": "business.meeting-minutes"
+      }
+    }
+  ]
+}

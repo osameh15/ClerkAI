@@ -1,0 +1,248 @@
+# Example manifest — general.handwriting-document
+# Validates against docs/api/schemas/module-manifest.schema.json (manifestVersion 1.0).
+manifestVersion: "1.0"
+
+module:
+  key: general.handwriting-document
+  version: 1.0.0
+  publisher: clerk-official
+  category: general
+  name:
+    en: Handwriting to Document
+    fa: دست‌نوشته به سند
+  description:
+    en: Convert handwritten pages and scans into clean, reviewable documents — a clean document, formal letter, meeting minutes or task list — from the same source.
+    fa: تبدیل دست‌نوشته و اسکن به سند تمیز، نامه رسمی، صورتجلسه یا فهرست کار از یک منبع.
+  icon: assets/icon.svg
+  tags: [handwriting, ocr, letters]
+  license: proprietary
+
+runtime:
+  type: declarative
+
+compatibility:
+  platform: ">=1.0.0 <2.0.0"
+
+dependencies:
+  - module: business.meeting-minutes
+    version: "^1.0.0"
+    optional: true
+    reason: Reuses the minutes artifact schema and template when the user chooses the Meeting Minutes output.
+
+capabilities:
+  - source.ocr
+  - source.handwriting_ocr
+  - source.layout
+  - source.document_parse
+  - ai.structured_extraction
+  - ai.generation
+  - knowledge.fusion
+  - artifact.export.pdf
+  - artifact.export.docx
+  - template.numbering
+
+inputs:
+  manualText: true
+  slots:
+    - key: pages
+      label: { en: Handwritten pages or scans, fa: صفحات دست‌نویس یا اسکن }
+      accepts: [image, document]
+      mimeTypes: [image/jpeg, image/png, image/heic, image/webp, application/pdf, image/tiff]
+      required: true
+      multiple: true
+      requiredExtractions: [metadata, handwriting_ocr, ocr, layout, language]
+      capture: [camera, scan, upload]
+    - key: context
+      label: { en: Additional context, fa: توضیحات تکمیلی }
+      accepts: [text]
+      multiple: false
+      requiredExtractions: [text]
+      capture: [text]
+  limits:
+    maxSources: 50
+    maxTotalPages: 100
+  readiness:
+    minSources: 1
+    requireAnyOfSlots: [pages]
+  autoSubmit: false
+
+configuration:
+  schema: schemas/configuration.schema.json
+  scopes: [organization, team]
+  defaults:
+    defaultOutput: clean_document
+    preserveLineBreaks: false
+    unreadablePolicy: block_finalization
+    confidenceThreshold: 0.85
+
+jobInput:
+  schema: schemas/job-input.schema.json
+  uiSchema: schemas/job-input.ui.json
+
+knowledge:
+  schema: schemas/knowledge.schema.json
+  entityTypes:
+    - key: handwriting.text_block
+      baseType: document_section
+      label: { en: Text block, fa: بلوک متن }
+      evidence: required
+      review: { confidenceThreshold: 0.85, blocksFinalization: true }
+    - key: handwriting.uncertain_span
+      baseType: other
+      label: { en: Uncertain text, fa: متن نامطمئن }
+      evidence: required
+      review: { alwaysReview: true, blocksFinalization: true }
+    - key: handwriting.heading
+      baseType: document_section
+      evidence: recommended
+    - key: handwriting.list_item
+      baseType: document_section
+      evidence: recommended
+    - key: handwriting.person
+      baseType: person
+      evidence: required
+    - key: handwriting.date
+      baseType: date
+      evidence: required
+      review: { confidenceThreshold: 0.9, blocksFinalization: true }
+    - key: handwriting.amount
+      baseType: amount
+      evidence: required
+      review: { confidenceThreshold: 0.9, blocksFinalization: true }
+    - key: handwriting.task
+      baseType: action
+      evidence: required
+      evidenceRequiredAttributes: [owner, deadline]
+  relationTypes:
+    - { key: CONTAINS, from: [handwriting.text_block], to: [handwriting.uncertain_span, handwriting.person, handwriting.date, handwriting.amount], cardinality: one_to_many }
+    - { key: FOLLOWS, from: [handwriting.text_block, handwriting.heading, handwriting.list_item], to: [handwriting.text_block, handwriting.heading, handwriting.list_item], cardinality: one_to_one }
+    - { key: RESPONSIBLE_FOR, from: [handwriting.person], to: [handwriting.task], cardinality: one_to_many }
+
+artifacts:
+  - type: clean_document
+    name: { en: Clean document, fa: سند تمیز }
+    schema: schemas/artifacts/clean-document.schema.json
+    schemaVersion: 1.0.0
+    primary: true
+    generation: automatic
+    templates:
+      - { key: clean-document-default, path: templates/clean-document, default: true }
+    exports: [pdf, docx]
+  - type: formal_letter
+    name: { en: Formal letter, fa: نامه رسمی }
+    schema: schemas/artifacts/formal-letter.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: formal-letter-default, path: templates/formal-letter, default: true }
+    exports: [pdf, docx]
+    approval: { workflow: letter-approval, requirement: configurable }
+    numbering: { sequence: outgoing-letter, defaultPattern: "L-{yyyy}-{seq:5}", assignOn: final }
+  - type: meeting_minutes
+    name: { en: Meeting minutes, fa: صورتجلسه }
+    schema: schemas/artifacts/meeting-minutes.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: minutes-from-notes, path: templates/minutes-from-notes, default: true }
+    exports: [pdf, docx]
+  - type: task_list
+    name: { en: Task list, fa: فهرست کارها }
+    schema: schemas/artifacts/task-list.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: task-list-default, path: templates/task-list, default: true }
+    exports: [pdf, docx]
+    createsActionItems: { fromEntityTypes: [handwriting.task], trigger: final }
+
+workflows:
+  processing:
+    - { key: handwriting-processing, definition: workflows/processing.yaml, default: true, purpose: job }
+    - { key: handwriting-additional-artifact, definition: workflows/additional-artifact.yaml, purpose: additional_artifact }
+  approval:
+    - { key: letter-approval, definition: workflows/letter-approval.yaml, customizable: true }
+
+permissions:
+  - key: general.handwriting-document.create
+    description: { en: Create handwriting conversion jobs, fa: ایجاد تبدیل دست‌نوشته }
+    defaultRoles: [owner, admin, manager, member]
+  - key: general.handwriting-document.view
+    description: { en: View handwriting documents within scope, fa: مشاهده }
+    defaultRoles: [owner, admin, manager, member, viewer]
+  - key: general.handwriting-document.edit
+    description: { en: Edit documents and confirm uncertain text, fa: ویرایش و تأیید متن نامطمئن }
+    defaultRoles: [owner, admin, manager, member]
+  - key: general.handwriting-document.approve
+    description: { en: Approve formal letters, fa: تأیید نامه رسمی }
+    defaultRoles: [owner, admin, manager]
+
+entitlements:
+  required: [module.general.handwriting-document]
+  features:
+    - { key: export.docx, gates: ["export:docx"] }
+    - { key: workflow.approval, gates: ["artifact:formal_letter:approval"] }
+  meters: [ocr, vision, llm.input, llm.output, artifact.export, module.execution]
+
+ai:
+  tasks:
+    - key: recognize_handwriting
+      capability: handwriting_recognition
+      profile: persian_handwriting_ocr
+      quality: high
+      languages: [fa, en]
+      modalities: [image]
+      outputSchema: schemas/ai/handwriting-ocr.schema.json
+    - key: structure_text
+      capability: structured_extraction
+      profile: high_quality_extraction
+      languages: [fa, en]
+      modalities: [text, image]
+      prompt: handwriting.structure@^1.0.0
+      outputSchema: schemas/ai/structure.schema.json
+      requiresEvidence: true
+    - key: compose_artifact
+      capability: generation
+      profile: standard_generation
+      languages: [fa, en]
+      modalities: [text]
+      prompt: handwriting.compose@^1.0.0
+      outputSchema: schemas/ai/compose.schema.json
+      requiresEvidence: true
+
+evaluation:
+  suites:
+    - key: handwriting-core
+      dataset: handwriting-golden@^1.0.0
+      tasks: [recognize_handwriting, structure_text]
+      metrics:
+        - { key: ocr.cer_fa, max: 0.12 }
+        - { key: ocr.cer_en, max: 0.08 }
+        - { key: uncertain.recall, min: 0.95 }
+        - { key: numbers_dates.accuracy, min: 0.97 }
+        - { key: hallucination.silent_invention_rate, max: 0.0 }
+      releaseGate: true
+
+review:
+  defaultConfidenceThreshold: 0.85
+  bands: { high: 0.9, medium: 0.7 }
+  requireReviewBeforeArtifact: true
+
+ui:
+  mode: hybrid
+  card: { icon: assets/card.svg, accent: teal, order: 30 }
+  labels:
+    job: { en: Conversion, fa: تبدیل }
+  extensions:
+    - { point: job.review, component: review.handwriting-spans, fallback: generic }
+    - { point: job.create, component: capture.multi-page-scan, fallback: generic }
+
+telemetry:
+  metrics:
+    - { key: handwriting.pages, type: histogram, unit: count }
+    - { key: handwriting.uncertain_spans, type: histogram, unit: count }
+  kpis: [time_to_artifact, acceptance_rate, human_correction_rate, evidence_coverage, module_activation]
+
+translations:
+  directory: translations
+  locales: [en, fa]

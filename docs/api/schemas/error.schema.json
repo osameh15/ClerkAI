@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/error.schema.json",
+  "title": "Clerk API Error Response",
+  "description": "Standard error body returned by every non-2xx API response. See docs/api/errors.md and docs/api/error-catalog.md.",
+  "type": "object",
+  "required": ["error"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "request_id"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z]+(?:_[A-Z0-9]+)+$",
+          "description": "Stable machine-readable code, namespaced by domain prefix (AUTH_, ORG_, ACCESS_, MODULE_, SOURCE_, JOB_, AI_, ARTIFACT_, WORKFLOW_, BILLING_, SECURITY_, VALIDATION_, IDEMPOTENCY_, RATE_, SYSTEM_ ...).",
+          "examples": ["MODULE_NOT_ENTITLED"]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Human-readable, localizable message. Never contains secrets, stack traces or other tenants' data."
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "True if the same request may succeed when retried later (honour Retry-After)."
+        },
+        "details": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "required": ["code"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string", "pattern": "^[A-Z]+(?:_[A-Z0-9]+)+$" },
+              "field": {
+                "type": "string",
+                "description": "JSON Pointer (RFC 6901) to the offending request field.",
+                "maxLength": 512
+              },
+              "message": { "type": "string", "maxLength": 1000 },
+              "meta": { "type": "object" }
+            }
+          }
+        },
+        "meta": {
+          "type": "object",
+          "description": "Code-specific structured data, e.g. { required_entitlement: 'export.docx' } or { current_etag: '\"v7\"' }."
+        },
+        "doc_url": { "type": "string", "format": "uri" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "error": {
+        "code": "MODULE_NOT_ENTITLED",
+        "message": "Your current plan does not include this module.",
+        "request_id": "0192f4a8-7c1e-7a3b-9d2e-4b5c6d7e8f90",
+        "retryable": false,
+        "meta": { "required_entitlement": "module.construction.site-report", "upgrade_available": true }
+      }
+    }
+  ]
+}

@@ -1,0 +1,316 @@
+# Example manifest — business.meeting-minutes
+# Validates against docs/api/schemas/module-manifest.schema.json (manifestVersion 1.0).
+# Paths are relative to the module package root (modules/business/meeting-minutes/).
+manifestVersion: "1.0"
+
+module:
+  key: business.meeting-minutes
+  version: 1.0.0
+  publisher: clerk-official
+  category: business
+  name:
+    en: Meeting Minutes
+    fa: صورتجلسه
+  description:
+    en: Turn meeting recordings, agendas and notes into formal minutes with decisions, actions, owners, deadlines, risks and open questions — each backed by evidence.
+    fa: تبدیل صدای جلسه، دستور جلسه و یادداشت‌ها به صورتجلسه رسمی با تصمیم‌ها، اقدامات، مسئولان، مهلت‌ها و ریسک‌ها همراه با شواهد.
+  icon: assets/icon.svg
+  tags: [meetings, minutes, actions]
+  license: proprietary
+  changelog: CHANGELOG.md
+
+runtime:
+  type: declarative
+
+compatibility:
+  platform: ">=1.0.0 <2.0.0"
+
+dependencies: []
+
+capabilities:
+  - source.transcription
+  - source.diarization
+  - source.ocr
+  - source.handwriting_ocr
+  - source.document_parse
+  - ai.structured_extraction
+  - ai.summarization
+  - knowledge.fusion
+  - artifact.export.pdf
+  - artifact.export.docx
+  - workflow.approval
+  - template.numbering
+
+inputs:
+  manualText: true
+  slots:
+    - key: recording
+      label: { en: Meeting recording, fa: فایل صوتی یا ویدیویی جلسه }
+      accepts: [audio, video]
+      multiple: true
+      requiredExtractions: [normalized_audio, transcript, diarization, language]
+      capture: [upload, record_audio, record_video]
+    - key: agenda
+      label: { en: Agenda, fa: دستور جلسه }
+      accepts: [document, image, text]
+      multiple: false
+      requiredExtractions: [text, layout]
+      capture: [upload, camera, text]
+    - key: notes
+      label: { en: Notes (typed or handwritten), fa: یادداشت‌ها }
+      accepts: [image, document, text]
+      requiredExtractions: [text, handwriting_ocr]
+      capture: [upload, camera, scan, text]
+    - key: attachments
+      label: { en: Supporting documents, fa: مستندات پشتیبان }
+      accepts: [document, presentation, spreadsheet, image]
+      requiredExtractions: [text, tables]
+      capture: [upload]
+  limits:
+    maxSources: 30
+    maxTotalDurationSeconds: 21600
+    maxTotalPages: 300
+  readiness:
+    minSources: 1
+    requireAnyOfSlots: [recording, notes, agenda]
+  autoSubmit: false
+
+configuration:
+  schema: schemas/configuration.schema.json
+  uiSchema: schemas/configuration.ui.json
+  scopes: [organization, team, project]
+  defaults:
+    language: auto
+    speakerIdentification: participants_list
+    approvalRequired: false
+    outputs: [minutes, action_list]
+    transcriptVisibility: members
+    confidenceThreshold: 0.8
+
+jobInput:
+  schema: schemas/job-input.schema.json
+  uiSchema: schemas/job-input.ui.json
+
+knowledge:
+  schema: schemas/knowledge.schema.json
+  entityTypes:
+    - key: meeting.participant
+      baseType: person
+      label: { en: Participant, fa: شرکت‌کننده }
+      evidence: recommended
+    - key: meeting.agenda_item
+      baseType: document_section
+      label: { en: Agenda item, fa: بند دستور جلسه }
+      evidence: recommended
+    - key: meeting.decision
+      baseType: decision
+      label: { en: Decision, fa: تصمیم }
+      evidence: required
+      review: { confidenceThreshold: 0.8, blocksFinalization: true }
+    - key: meeting.proposal
+      baseType: decision
+      label: { en: Proposal (not decided), fa: پیشنهاد }
+      evidence: required
+    - key: meeting.discussion_point
+      baseType: event
+      label: { en: Discussion point, fa: موضوع بحث }
+      evidence: recommended
+    - key: meeting.unresolved_topic
+      baseType: question
+      label: { en: Unresolved topic, fa: موضوع حل‌نشده }
+      evidence: required
+    - key: meeting.action
+      baseType: action
+      label: { en: Action item, fa: اقدام }
+      evidence: required
+      evidenceRequiredAttributes: [owner, deadline]
+      review: { confidenceThreshold: 0.85, blocksFinalization: true }
+    - key: meeting.deadline
+      baseType: deadline
+      label: { en: Deadline, fa: مهلت }
+      evidence: required
+    - key: meeting.risk
+      baseType: risk
+      label: { en: Risk, fa: ریسک }
+      evidence: required
+    - key: meeting.open_question
+      baseType: question
+      label: { en: Open question, fa: سؤال باز }
+      evidence: recommended
+  relationTypes:
+    - { key: RESPONSIBLE_FOR, from: [meeting.participant], to: [meeting.action], cardinality: one_to_many }
+    - { key: DUE_AT, from: [meeting.action], to: [meeting.deadline], cardinality: one_to_one }
+    - { key: DECIDED_BY, from: [meeting.decision], to: [meeting.participant], cardinality: many_to_many }
+    - { key: RAISED_BY, from: [meeting.risk, meeting.open_question, meeting.proposal], to: [meeting.participant], cardinality: many_to_many }
+    - { key: RELATES_TO_AGENDA, from: [meeting.decision, meeting.action, meeting.discussion_point], to: [meeting.agenda_item], cardinality: many_to_many }
+    - { key: RESULTS_IN, from: [meeting.decision], to: [meeting.action], cardinality: one_to_many }
+
+artifacts:
+  - type: minutes
+    name: { en: Formal meeting minutes, fa: صورتجلسه رسمی }
+    schema: schemas/artifacts/minutes.schema.json
+    schemaVersion: 1.0.0
+    primary: true
+    generation: automatic
+    templates:
+      - { key: minutes-formal, path: templates/minutes-formal, default: true }
+      - { key: minutes-compact, path: templates/minutes-compact }
+    exports: [pdf, docx]
+    approval: { workflow: minutes-approval, requirement: configurable }
+    numbering: { sequence: meeting-minutes, defaultPattern: "MM-{yyyy}-{seq:4}", assignOn: final }
+    createsActionItems: { fromEntityTypes: [meeting.action], trigger: final }
+  - type: action_list
+    name: { en: Task list, fa: فهرست اقدامات }
+    schema: schemas/artifacts/action-list.schema.json
+    schemaVersion: 1.0.0
+    generation: automatic
+    templates:
+      - { key: action-list-default, path: templates/action-list, default: true }
+    exports: [pdf, docx]
+  - type: executive_summary
+    name: { en: Executive summary, fa: خلاصه مدیریتی }
+    schema: schemas/artifacts/executive-summary.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: summary-default, path: templates/executive-summary, default: true }
+    exports: [pdf, docx]
+  - type: follow_up
+    name: { en: Follow-up message, fa: پیام پیگیری }
+    schema: schemas/artifacts/follow-up.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: follow-up-default, path: templates/follow-up, default: true }
+    exports: [pdf, docx]
+  - type: transcript
+    name: { en: Transcript (secondary), fa: متن کامل (ثانویه) }
+    schema: schemas/artifacts/transcript.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: transcript-default, path: templates/transcript, default: true }
+    exports: [pdf, docx]
+
+workflows:
+  processing:
+    - { key: meeting-processing, definition: workflows/processing.yaml, default: true, purpose: job }
+    - { key: meeting-additional-artifact, definition: workflows/additional-artifact.yaml, purpose: additional_artifact }
+  approval:
+    - { key: minutes-approval, definition: workflows/approval.yaml, customizable: true }
+
+permissions:
+  - key: business.meeting-minutes.create
+    description: { en: Create meeting minutes jobs, fa: ایجاد صورتجلسه }
+    defaultRoles: [owner, admin, manager, member]
+  - key: business.meeting-minutes.view
+    description: { en: View meeting minutes within scope, fa: مشاهده صورتجلسه }
+    defaultRoles: [owner, admin, manager, member, viewer]
+  - key: business.meeting-minutes.edit
+    description: { en: Edit meeting minutes and resolve review items, fa: ویرایش صورتجلسه }
+    defaultRoles: [owner, admin, manager, member]
+  - key: business.meeting-minutes.approve
+    description: { en: Approve meeting minutes, fa: تأیید صورتجلسه }
+    defaultRoles: [owner, admin, manager]
+  - key: business.meeting-minutes.view-transcript
+    description: { en: View full transcript, fa: مشاهده متن کامل جلسه }
+    defaultRoles: [owner, admin, manager, member]
+
+entitlements:
+  required: [module.business.meeting-minutes]
+  features:
+    - { key: workflow.approval, gates: ["artifact:minutes:approval"] }
+    - { key: template.custom, gates: ["artifact:minutes:custom_template"] }
+    - { key: export.docx, gates: ["export:docx"] }
+  meters: [audio.transcription, video.processing, ocr, llm.input, llm.output, artifact.export, module.execution]
+
+ai:
+  tasks:
+    - key: transcribe
+      capability: transcription
+      profile: persian_transcription
+      quality: high
+      languages: [fa, en]
+      modalities: [audio]
+    - key: diarize
+      capability: diarization
+      profile: speaker_diarization
+      modalities: [audio]
+    - key: extract_minutes
+      capability: structured_extraction
+      profile: high_quality_extraction
+      quality: high
+      languages: [fa, en]
+      modalities: [text]
+      prompt: meeting.minutes-extraction@^1.0.0
+      outputSchema: schemas/ai/minutes-extraction.schema.json
+      requiresEvidence: true
+    - key: extract_actions
+      capability: structured_extraction
+      profile: high_quality_extraction
+      quality: high
+      languages: [fa, en]
+      modalities: [text]
+      prompt: meeting.action-extraction@^1.0.0
+      outputSchema: schemas/ai/meeting-actions.schema.json
+      requiresEvidence: true
+    - key: summarize
+      capability: summarization
+      profile: standard_generation
+      languages: [fa, en]
+      modalities: [text]
+      prompt: meeting.executive-summary@^1.0.0
+      outputSchema: schemas/ai/executive-summary.schema.json
+      requiresEvidence: true
+  dataPolicy:
+    sendsSourceContent: true
+    allowsExternalProviders: true
+
+evaluation:
+  suites:
+    - key: meeting-core
+      dataset: meeting-minutes-golden@^1.0.0
+      tasks: [extract_minutes, extract_actions]
+      metrics:
+        - { key: decision.f1, min: 0.80 }
+        - { key: action.precision, min: 0.85 }
+        - { key: action.recall, min: 0.80 }
+        - { key: owner.accuracy, min: 0.85 }
+        - { key: deadline.accuracy, min: 0.85 }
+        - { key: evidence.coverage, min: 0.90 }
+        - { key: hallucination.critical_unsupported_action_rate, max: 0.01 }
+        - { key: schema.validity_after_retry, min: 0.995 }
+      releaseGate: true
+    - key: meeting-transcription
+      dataset: meeting-audio-fa-en@^1.0.0
+      tasks: [transcribe, diarize]
+      metrics:
+        - { key: transcription.wer_fa, blocking: false }
+        - { key: transcription.proper_noun_accuracy, blocking: false }
+        - { key: diarization.der, blocking: false }
+      releaseGate: false
+
+review:
+  defaultConfidenceThreshold: 0.8
+  bands: { high: 0.85, medium: 0.6 }
+  requireReviewBeforeArtifact: false
+
+ui:
+  mode: hybrid
+  card: { icon: assets/card.svg, accent: indigo, order: 10 }
+  labels:
+    job: { en: Meeting, fa: جلسه }
+  extensions:
+    - { point: job.capture, component: capture.meeting-recorder, fallback: generic }
+    - { point: job.review, component: review.speaker-resolver, fallback: generic }
+    - { point: artifact.view, component: artifact.transcript-panel, fallback: hidden }
+
+telemetry:
+  metrics:
+    - { key: meeting.speakers_detected, type: histogram, unit: count }
+    - { key: meeting.actions_extracted, type: histogram, unit: count }
+  kpis: [time_to_artifact, acceptance_rate, human_correction_rate, evidence_coverage, module_activation]
+
+translations:
+  directory: translations
+  locales: [en, fa]

@@ -1,0 +1,270 @@
+# Example manifest — construction.site-report
+# Validates against docs/api/schemas/module-manifest.schema.json (manifestVersion 1.0).
+manifestVersion: "1.0"
+
+module:
+  key: construction.site-report
+  version: 1.0.0
+  publisher: clerk-official
+  category: construction
+  name:
+    en: Construction Site Report
+    fa: گزارش بازدید کارگاه
+  description:
+    en: Capture site visits on mobile — photos, voice, video and notes, even offline — and get structured observations, corrective actions and a formal site report with repeat inspection.
+    fa: ثبت بازدید کارگاهی با موبایل حتی بدون اینترنت و تولید مشاهدات، اقدامات اصلاحی و گزارش رسمی با امکان بازدید مجدد.
+  icon: assets/icon.svg
+  tags: [construction, inspection, field]
+  license: proprietary
+
+runtime:
+  type: declarative
+
+compatibility:
+  platform: ">=1.0.0 <2.0.0"
+
+capabilities:
+  - source.transcription
+  - source.vision
+  - source.ocr
+  - source.document_parse
+  - source.video_frames
+  - ai.structured_extraction
+  - ai.vision_analysis
+  - knowledge.fusion
+  - knowledge.cross_job_links
+  - pwa.offline_capture
+  - artifact.export.pdf
+  - artifact.export.docx
+  - workflow.approval
+  - template.numbering
+  - actions.tracking
+
+inputs:
+  manualText: true
+  slots:
+    - key: observation_media
+      label: { en: Photos and videos, fa: عکس و ویدیو }
+      accepts: [image, video]
+      requiredExtractions: [metadata, vision_caption, ocr, frames]
+      capture: [camera, record_video, upload]
+      offline: true
+    - key: voice_notes
+      label: { en: Voice notes, fa: یادداشت صوتی }
+      accepts: [audio]
+      requiredExtractions: [normalized_audio, transcript, language]
+      capture: [record_audio, upload]
+      offline: true
+    - key: text_notes
+      label: { en: Text notes, fa: یادداشت متنی }
+      accepts: [text]
+      requiredExtractions: [text]
+      capture: [text]
+      offline: true
+    - key: reference_documents
+      label: { en: Drawings and specifications, fa: نقشه‌ها و مشخصات فنی }
+      accepts: [document, image]
+      requiredExtractions: [text, layout]
+      capture: [upload]
+  limits:
+    maxSources: 300
+    maxTotalBytes: 5368709120
+    maxTotalDurationSeconds: 7200
+  readiness:
+    minSources: 1
+    requireAnyOfSlots: [observation_media, voice_notes, text_notes]
+  autoSubmit: false
+
+configuration:
+  schema: schemas/configuration.schema.json
+  uiSchema: schemas/configuration.ui.json
+  scopes: [organization, project]
+  defaults:
+    categories: [structural, electrical, mechanical, safety, quality, housekeeping, other]
+    severities: [low, medium, high, critical]
+    defaultDueDays: { low: 14, medium: 7, high: 3, critical: 1 }
+    approvalRequired: true
+    groupingWindowSeconds: 120
+    confidenceThreshold: 0.75
+
+jobInput:
+  schema: schemas/job-input.schema.json
+  uiSchema: schemas/job-input.ui.json
+
+knowledge:
+  schema: schemas/knowledge.schema.json
+  entityTypes:
+    - key: site.visit
+      baseType: event
+      label: { en: Site visit, fa: بازدید }
+      evidence: none
+    - key: site.location
+      baseType: location
+      label: { en: Location, fa: موقعیت }
+      evidence: recommended
+    - key: site.observation
+      baseType: observation
+      label: { en: Observation, fa: مشاهده }
+      evidence: required
+      evidenceRequiredAttributes: [description, location]
+      review: { confidenceThreshold: 0.75, blocksFinalization: true }
+    - key: site.issue
+      baseType: issue
+      label: { en: Issue, fa: ایراد }
+      evidence: required
+      evidenceRequiredAttributes: [severity, category]
+      review: { confidenceThreshold: 0.75, blocksFinalization: true }
+    - key: site.corrective_action
+      baseType: action
+      label: { en: Corrective action, fa: اقدام اصلاحی }
+      evidence: recommended
+      evidenceRequiredAttributes: [responsible_party, deadline]
+    - key: site.responsible_party
+      baseType: organization
+      label: { en: Responsible party, fa: مسئول }
+      evidence: recommended
+    - key: site.deadline
+      baseType: deadline
+      label: { en: Deadline, fa: مهلت }
+      evidence: recommended
+  relationTypes:
+    - { key: OBSERVED_AT, from: [site.observation], to: [site.location], cardinality: one_to_one }
+    - { key: INDICATES, from: [site.observation], to: [site.issue], cardinality: one_to_many }
+    - { key: CORRECTED_BY, from: [site.issue], to: [site.corrective_action], cardinality: one_to_many }
+    - { key: RESPONSIBLE_FOR, from: [site.responsible_party], to: [site.corrective_action], cardinality: one_to_many }
+    - { key: DUE_AT, from: [site.corrective_action], to: [site.deadline], cardinality: one_to_one }
+    - { key: REINSPECTS, from: [site.observation], to: [site.issue], cardinality: many_to_many }
+
+artifacts:
+  - type: site_report
+    name: { en: Site visit report, fa: گزارش بازدید کارگاه }
+    schema: schemas/artifacts/site-report.schema.json
+    schemaVersion: 1.0.0
+    primary: true
+    generation: automatic
+    templates:
+      - { key: site-report-formal, path: templates/site-report-formal, default: true }
+      - { key: site-report-photo-log, path: templates/site-report-photo-log }
+    exports: [pdf, docx]
+    approval: { workflow: site-report-approval, requirement: configurable }
+    numbering: { sequence: site-report, defaultPattern: "SR-{project}-{yyyy}-{seq:4}", assignOn: final }
+    createsActionItems: { fromEntityTypes: [site.corrective_action], trigger: final }
+  - type: open_items_list
+    name: { en: Open items list, fa: فهرست موارد باز }
+    schema: schemas/artifacts/open-items.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: open-items-default, path: templates/open-items, default: true }
+    exports: [pdf, docx]
+
+workflows:
+  processing:
+    - { key: site-visit-processing, definition: workflows/processing.yaml, default: true, purpose: job }
+    - { key: repeat-inspection, definition: workflows/repeat-inspection.yaml, purpose: repeat }
+  approval:
+    - { key: site-report-approval, definition: workflows/approval.yaml, customizable: true }
+
+permissions:
+  - key: construction.site-report.create
+    description: { en: Create site visits and capture observations, fa: ایجاد بازدید }
+    defaultRoles: [owner, admin, manager, member]
+  - key: construction.site-report.view
+    description: { en: View site reports within scope, fa: مشاهده گزارش بازدید }
+    defaultRoles: [owner, admin, manager, member, viewer, guest]
+  - key: construction.site-report.edit
+    description: { en: Edit site reports and resolve review items, fa: ویرایش گزارش بازدید }
+    defaultRoles: [owner, admin, manager, member]
+  - key: construction.site-report.approve
+    description: { en: Approve site reports, fa: تأیید گزارش بازدید }
+    defaultRoles: [owner, admin, manager]
+  - key: construction.site-report.resolve-items
+    description: { en: Mark observations and corrective actions as resolved, fa: بستن موارد باز }
+    defaultRoles: [owner, admin, manager, member]
+
+entitlements:
+  required: [module.construction.site-report]
+  features:
+    - { key: workflow.approval, gates: ["artifact:site_report:approval"] }
+    - { key: pwa.offline, gates: ["capture:offline"] }
+    - { key: export.docx, gates: ["export:docx"] }
+  meters: [vision, audio.transcription, video.processing, ocr, llm.input, llm.output, storage, artifact.export, module.execution]
+
+ai:
+  tasks:
+    - key: transcribe_voice
+      capability: transcription
+      profile: persian_transcription
+      languages: [fa, en]
+      modalities: [audio]
+    - key: analyse_media
+      capability: vision_analysis
+      profile: high_quality_vision
+      modalities: [image, video]
+      prompt: site.media-analysis@^1.0.0
+      outputSchema: schemas/ai/media-analysis.schema.json
+    - key: group_observations
+      capability: structured_extraction
+      profile: high_quality_extraction
+      quality: high
+      languages: [fa, en]
+      modalities: [text, image]
+      prompt: site.observation-grouping@^1.0.0
+      outputSchema: schemas/ai/observations.schema.json
+      requiresEvidence: true
+    - key: match_reinspection
+      capability: structured_extraction
+      profile: high_quality_extraction
+      modalities: [text, image]
+      prompt: site.reinspection-matching@^1.0.0
+      outputSchema: schemas/ai/reinspection.schema.json
+      requiresEvidence: true
+
+evaluation:
+  suites:
+    - key: site-core
+      dataset: site-report-golden@^1.0.0
+      tasks: [group_observations, analyse_media]
+      metrics:
+        - { key: observation.f1, min: 0.80 }
+        - { key: observation.media_linkage_accuracy, min: 0.90 }
+        - { key: category.accuracy, min: 0.80 }
+        - { key: location.accuracy, min: 0.80 }
+        - { key: severity.accuracy, min: 0.75 }
+        - { key: corrective_action.recall, min: 0.75 }
+        - { key: evidence.coverage, min: 0.90 }
+        - { key: hallucination.unsupported_observation_rate, max: 0.02 }
+      releaseGate: true
+    - key: site-reinspection
+      dataset: site-reinspection-golden@^1.0.0
+      tasks: [match_reinspection]
+      metrics:
+        - { key: reinspection.match_accuracy, min: 0.85 }
+      releaseGate: true
+
+review:
+  defaultConfidenceThreshold: 0.75
+  bands: { high: 0.85, medium: 0.6 }
+
+ui:
+  mode: hybrid
+  card: { icon: assets/card.svg, accent: amber, order: 20 }
+  labels:
+    job: { en: Site visit, fa: بازدید }
+  extensions:
+    - { point: job.create, component: capture.site-visit-setup, fallback: generic }
+    - { point: job.capture, component: capture.mobile-observation, fallback: generic }
+    - { point: job.review, component: review.observation-board, fallback: generic }
+    - { point: artifact.section, component: artifact.before-after-compare, fallback: generic }
+    - { point: project.dashboard, component: project.open-items-board, fallback: hidden }
+
+telemetry:
+  metrics:
+    - { key: site.observations_per_visit, type: histogram, unit: count }
+    - { key: site.offline_capture_age_seconds, type: histogram, unit: s }
+    - { key: site.reinspection_matches, type: counter }
+  kpis: [time_to_artifact, acceptance_rate, human_correction_rate, evidence_coverage, module_activation]
+
+translations:
+  directory: translations
+  locales: [en, fa]

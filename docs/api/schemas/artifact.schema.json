@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/artifact.schema.json",
+  "title": "Clerk Artifact Content Envelope",
+  "description": "Platform envelope for ArtifactVersion.content (ADR-016). The 'body' is validated additionally against the module artifact schema named by 'schema_ref'. Rich text uses the constrained RichText model; raw HTML is never accepted.",
+  "type": "object",
+  "required": ["schema_ref", "language", "title", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_ref": {
+      "$ref": "common.schema.json#/$defs/versionedRef",
+      "description": "Module artifact schema, e.g. 'business.meeting-minutes/minutes@1.0.0'."
+    },
+    "artifact_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "maxLength": 64
+    },
+    "language": { "$ref": "common.schema.json#/$defs/locale" },
+    "direction": { "type": "string", "enum": ["ltr", "rtl", "auto"], "default": "auto" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "metadata": {
+      "type": "object",
+      "description": "Document-level metadata rendered by templates (date, location, document_number placeholder, participants summary).",
+      "additionalProperties": true
+    },
+    "body": {
+      "type": "object",
+      "description": "Module-specific structured content. Validated against schema_ref."
+    },
+    "bindings": {
+      "type": "array",
+      "description": "Links from content paths to Knowledge items, enabling evidence display and knowledge corrections.",
+      "items": {
+        "type": "object",
+        "required": ["path", "knowledge_entity_id"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "maxLength": 512, "description": "JSON Pointer into body." },
+          "knowledge_entity_id": { "$ref": "common.schema.json#/$defs/uuid" },
+          "attribute": { "type": "string", "maxLength": 128 }
+        }
+      }
+    },
+    "section_origins": {
+      "type": "array",
+      "description": "Per-section provenance for AI/human transparency (Blueprint 16.2).",
+      "items": {
+        "type": "object",
+        "required": ["path", "origin"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "maxLength": 512 },
+          "origin": { "$ref": "common.schema.json#/$defs/origin" },
+          "last_modified_version_no": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "code"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "maxLength": 512 },
+          "code": { "type": "string", "enum": ["low_confidence", "missing_evidence", "conflicting_sources", "unresolved_review_item", "unreadable_source"] },
+          "review_item_id": { "$ref": "common.schema.json#/$defs/uuid" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "richText": {
+      "type": "array",
+      "description": "Constrained inline rich text: ordered text runs with marks. No HTML.",
+      "maxItems": 2000,
+      "items": { "$ref": "#/$defs/textRun" }
+    },
+    "textRun": {
+      "type": "object",
+      "required": ["text"],
+      "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "maxLength": 20000 },
+        "marks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["bold", "italic", "underline", "strike", "code"] }
+        },
+        "link": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "maxLength": 2048,
+          "description": "Only https links; sanitized and rendered with rel=noopener noreferrer."
+        },
+        "mention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["knowledge_entity_id"],
+          "properties": { "knowledge_entity_id": { "$ref": "common.schema.json#/$defs/uuid" } }
+        }
+      }
+    },
+    "paragraphs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/richText" },
+      "maxItems": 5000
+    },
+    "table": {
+      "type": "object",
+      "required": ["columns", "rows"],
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "label"],
+            "additionalProperties": false,
+            "properties": { "key": { "type": "string" }, "label": { "type": "string" } }
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": { "$ref": "#/$defs/richText" } }
+        }
+      }
+    },
+    "personRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "display_name": { "type": "string", "maxLength": 200 },
+        "membership_id": { "$ref": "common.schema.json#/$defs/uuid" },
+        "knowledge_entity_id": { "$ref": "common.schema.json#/$defs/uuid" },
+        "role_text": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "dateValue": {
+      "type": "object",
+      "description": "Business date with the original expression preserved (OD-026).",
+      "additionalProperties": false,
+      "properties": {
+        "date": { "$ref": "common.schema.json#/$defs/date" },
+        "original_text": { "type": "string", "maxLength": 200 },
+        "calendar": { "type": "string", "enum": ["gregorian", "jalali"] },
+        "is_relative": { "type": "boolean" }
+      }
+    },
+    "imageRef": {
+      "type": "object",
+      "required": ["source_file_id"],
+      "additionalProperties": false,
+      "properties": {
+        "source_file_id": { "$ref": "common.schema.json#/$defs/uuid" },
+        "caption": { "$ref": "#/$defs/richText" },
+        "evidence_link_id": { "$ref": "common.schema.json#/$defs/uuid" }
+      }
+    }
+  }
+}

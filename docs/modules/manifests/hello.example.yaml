@@ -1,0 +1,107 @@
+# Example manifest — platform.hello (Sprint 0/1 vertical-slice module; internal, not listed publicly)
+# Validates against docs/api/schemas/module-manifest.schema.json (manifestVersion 1.0).
+manifestVersion: "1.0"
+
+module:
+  key: platform.hello
+  version: 0.1.0
+  publisher: clerk-official
+  category: platform
+  name:
+    en: Hello Module
+    fa: ماژول آزمایشی
+  description:
+    en: Minimal declarative module proving the platform path — source to knowledge to evidence to artifact — without any Core change.
+    fa: ماژول حداقلی برای اثبات مسیر پلتفرم بدون تغییر در هسته.
+  tags: [internal, test]
+  license: proprietary
+
+runtime:
+  type: declarative
+
+compatibility:
+  platform: ">=1.0.0 <2.0.0"
+
+capabilities:
+  - source.document_parse
+  - source.ocr
+  - ai.structured_extraction
+
+inputs:
+  manualText: true
+  slots:
+    - key: input
+      label: { en: Text or image, fa: متن یا تصویر }
+      accepts: [text, image]
+      required: true
+      requiredExtractions: [text, ocr]
+      capture: [upload, text]
+  limits:
+    maxSources: 5
+  readiness:
+    minSources: 1
+    requireAnyOfSlots: [input]
+  autoSubmit: false
+
+jobInput:
+  schema: schemas/job-input.schema.json
+
+knowledge:
+  entityTypes:
+    - key: hello.note
+      baseType: other
+      label: { en: Note, fa: یادداشت }
+      evidence: required
+      review: { confidenceThreshold: 0.7, blocksFinalization: false }
+
+artifacts:
+  - type: note_summary
+    name: { en: Note summary, fa: خلاصه یادداشت }
+    schema: schemas/artifacts/note-summary.schema.json
+    schemaVersion: 0.1.0
+    primary: true
+    generation: automatic
+    templates:
+      - { key: note-summary-default, path: templates/note-summary, default: true }
+    exports: [pdf]
+
+workflows:
+  processing:
+    - { key: hello-processing, definition: workflows/processing.yaml, default: true, purpose: job }
+
+permissions:
+  - key: platform.hello.create
+    description: { en: Create hello jobs, fa: ایجاد کار آزمایشی }
+    defaultRoles: [owner, admin, manager, member]
+  - key: platform.hello.view
+    description: { en: View hello jobs, fa: مشاهده }
+    defaultRoles: [owner, admin, manager, member, viewer]
+  - key: platform.hello.edit
+    description: { en: Edit hello artifacts, fa: ویرایش }
+    defaultRoles: [owner, admin, manager, member]
+
+entitlements:
+  required: [module.platform.hello]
+  meters: [llm.input, llm.output, module.execution]
+
+ai:
+  tasks:
+    - key: extract_note
+      capability: structured_extraction
+      profile: standard_extraction
+      prompt: hello.note-extraction@^0.1.0
+      outputSchema: schemas/ai/note.schema.json
+      requiresEvidence: true
+
+evaluation:
+  suites:
+    - key: hello-smoke
+      dataset: hello-fixtures@^0.1.0
+      tasks: [extract_note]
+      metrics:
+        - { key: schema.validity_after_retry, min: 1.0 }
+      releaseGate: true
+
+ui:
+  mode: generic
+  card: { accent: slate, order: 999 }

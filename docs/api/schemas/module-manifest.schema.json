@@ -1,0 +1,698 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.clerk.ai/v1/module-manifest.schema.json",
+  "title": "Clerk Module Manifest",
+  "description": "Formal, versioned contract describing one ModuleVersion (manifestVersion 1.0). Generic: must not encode behaviour specific to any single module. Reference: docs/modules/sdk/manifest-reference.md. Runtime contract: docs/modules/module-runtime-contract.md. Keys starting with 'x-' are reserved for non-normative extensions and are ignored by the platform.",
+  "type": "object",
+  "required": [
+    "manifestVersion",
+    "module",
+    "runtime",
+    "compatibility",
+    "inputs",
+    "knowledge",
+    "artifacts",
+    "workflows",
+    "permissions",
+    "entitlements",
+    "ui"
+  ],
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {}
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "manifestVersion": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Version of this manifest format."
+    },
+    "module": { "$ref": "#/$defs/identity" },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "dependencies": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/dependency" }
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "Platform capabilities this module requires. Installation fails if the platform does not provide them.",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/capabilityKey" }
+    },
+    "inputs": { "$ref": "#/$defs/inputs" },
+    "configuration": { "$ref": "#/$defs/configuration" },
+    "jobInput": { "$ref": "#/$defs/schemaDeclaration" },
+    "knowledge": { "$ref": "#/$defs/knowledge" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifactType" }
+    },
+    "workflows": { "$ref": "#/$defs/workflows" },
+    "permissions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/permission" }
+    },
+    "entitlements": { "$ref": "#/$defs/entitlements" },
+    "ai": { "$ref": "#/$defs/ai" },
+    "evaluation": { "$ref": "#/$defs/evaluation" },
+    "review": { "$ref": "#/$defs/review" },
+    "ui": { "$ref": "#/$defs/ui" },
+    "telemetry": { "$ref": "#/$defs/telemetry" },
+    "translations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "directory": { "$ref": "#/$defs/packagePath" },
+        "locales": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/locale" },
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "packagePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9._/-]+$",
+      "maxLength": 256,
+      "description": "Relative path inside the module package. No absolute paths, no '..'."
+    },
+    "localKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "capabilityKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+      "examples": ["source.transcription", "ai.structured_extraction", "artifact.export.pdf", "pwa.offline_capture"]
+    },
+    "identity": {
+      "type": "object",
+      "required": ["key", "version", "publisher", "category", "name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "$ref": "common.schema.json#/$defs/moduleKey" },
+        "version": { "$ref": "common.schema.json#/$defs/semver" },
+        "publisher": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Publisher key, e.g. 'clerk-official'."
+        },
+        "category": { "$ref": "#/$defs/localKey" },
+        "name": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "description": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "icon": { "$ref": "#/$defs/packagePath" },
+        "tags": { "type": "array", "items": { "$ref": "#/$defs/localKey" }, "uniqueItems": true },
+        "license": { "type": "string", "maxLength": 64 },
+        "support": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "format": "uri" },
+            "email": { "type": "string", "format": "email" }
+          }
+        },
+        "changelog": { "$ref": "#/$defs/packagePath" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["declarative", "native", "remote"],
+          "description": "declarative = interpreted by platform (preferred). native = official in-process step handlers (clerk-official only). remote = external execution via Remote Module Gateway (future)."
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["handlers"],
+          "properties": {
+            "handlers": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["stepType", "handler", "justification"],
+                "additionalProperties": false,
+                "properties": {
+                  "stepType": { "type": "string", "pattern": "^native\\.[a-z][a-z0-9_.-]*$" },
+                  "handler": { "type": "string", "description": "Registered handler key compiled into the platform." },
+                  "justification": { "type": "string", "minLength": 10 }
+                }
+              }
+            }
+          }
+        },
+        "remote": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoint", "auth"],
+          "properties": {
+            "endpoint": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "auth": { "type": "string", "enum": ["signed_request"] },
+            "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },
+            "dataScopes": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["job.input", "sources.normalized_content", "knowledge.read", "knowledge.write", "artifact.write"] },
+              "uniqueItems": true
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "native" } } },
+          "then": { "required": ["native"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "remote" } } },
+          "then": { "required": ["remote"] }
+        }
+      ]
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["platform"],
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "$ref": "common.schema.json#/$defs/semverRange",
+          "description": "Supported Clerk module-runtime contract versions."
+        },
+        "minimumClientVersion": { "$ref": "common.schema.json#/$defs/semver" },
+        "upgradeFrom": {
+          "type": "array",
+          "description": "Module versions from which an in-place upgrade (with data migrations) is supported.",
+          "items": { "$ref": "common.schema.json#/$defs/semverRange" }
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["module", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "module": { "$ref": "common.schema.json#/$defs/moduleKey" },
+        "version": { "$ref": "common.schema.json#/$defs/semverRange" },
+        "optional": { "type": "boolean", "default": false },
+        "reason": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "schemaDeclaration": {
+      "type": "object",
+      "required": ["schema"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/packagePath", "description": "Path to a JSON Schema (2020-12) inside the package." },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/semver" },
+        "uiSchema": { "$ref": "#/$defs/packagePath", "description": "Optional UI hints for schema-driven forms." }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "required": ["slots"],
+      "additionalProperties": false,
+      "properties": {
+        "slots": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/inputSlot" }
+        },
+        "manualText": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether free-text/manual note Sources may be added."
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxSources": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "maxTotalBytes": { "type": "integer", "minimum": 1 },
+            "maxTotalDurationSeconds": { "type": "integer", "minimum": 1 },
+            "maxTotalPages": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "description": "Declarative rule for when a draft Job becomes 'ready'.",
+          "additionalProperties": false,
+          "properties": {
+            "minSources": { "type": "integer", "minimum": 0, "default": 1 },
+            "requireAnyOfSlots": { "type": "array", "items": { "$ref": "#/$defs/localKey" } }
+          }
+        },
+        "autoSubmit": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, adding a Source may auto-submit when ready. Default false: adding a Source never implies submission."
+        }
+      }
+    },
+    "inputSlot": {
+      "type": "object",
+      "required": ["key", "label", "accepts"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "$ref": "#/$defs/localKey" },
+        "label": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "description": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "accepts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/sourceKind" }
+        },
+        "mimeTypes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z]+/[a-z0-9.+-]+$" }
+        },
+        "required": { "type": "boolean", "default": false },
+        "multiple": { "type": "boolean", "default": true },
+        "requiredExtractions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/extractionKind" },
+          "description": "Extraction kinds the platform must produce (or reuse) before module processing."
+        },
+        "capture": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["upload", "record_audio", "record_video", "camera", "scan", "text"] }
+        },
+        "offline": { "type": "boolean", "default": false, "description": "Capture into this slot is allowed while offline (PWA queue)." }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "required": ["schema"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/packagePath" },
+        "uiSchema": { "$ref": "#/$defs/packagePath" },
+        "defaults": { "type": "object" },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["organization", "team", "project"] },
+          "default": ["organization"]
+        }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "required": ["entityTypes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/packagePath" },
+        "entityTypes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/entityType" }
+        },
+        "relationTypes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/relationType" }
+        }
+      }
+    },
+    "entityType": {
+      "type": "object",
+      "required": ["key", "baseType"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*$",
+          "description": "Namespaced subtype key, e.g. 'meeting.decision'."
+        },
+        "baseType": {
+          "type": "string",
+          "enum": ["person", "organization", "date", "deadline", "location", "decision", "action", "issue", "risk", "question", "observation", "concept", "definition", "amount", "object", "event", "document_section", "other"]
+        },
+        "label": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "attributesSchema": { "$ref": "#/$defs/packagePath" },
+        "evidence": {
+          "type": "string",
+          "enum": ["required", "recommended", "none"],
+          "default": "recommended"
+        },
+        "evidenceRequiredAttributes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Attribute names that each need their own evidence (e.g. deadline, owner)."
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "confidenceThreshold": { "$ref": "common.schema.json#/$defs/confidence" },
+            "alwaysReview": { "type": "boolean", "default": false },
+            "blocksFinalization": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "relationType": {
+      "type": "object",
+      "required": ["key", "from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "examples": ["RESPONSIBLE_FOR", "DUE_AT"] },
+        "from": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "to": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_many"] },
+        "label": { "$ref": "common.schema.json#/$defs/localizedString" }
+      }
+    },
+    "artifactType": {
+      "type": "object",
+      "required": ["type", "name", "schema", "templates"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/localKey" },
+        "name": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "schema": { "$ref": "#/$defs/packagePath" },
+        "schemaVersion": { "$ref": "common.schema.json#/$defs/semver" },
+        "primary": { "type": "boolean", "default": false },
+        "generation": {
+          "type": "string",
+          "enum": ["automatic", "on_demand"],
+          "default": "automatic",
+          "description": "on_demand artifacts are generated later from existing Knowledge (e.g. additional artifact types from one Source)."
+        },
+        "templates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["key", "path"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "$ref": "#/$defs/localKey" },
+              "path": { "$ref": "#/$defs/packagePath" },
+              "default": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "exports": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["pdf", "docx"] },
+          "default": ["pdf", "docx"]
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workflow": { "$ref": "#/$defs/localKey" },
+            "requirement": { "type": "string", "enum": ["required", "optional", "configurable"], "default": "configurable" }
+          }
+        },
+        "numbering": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sequence"],
+          "properties": {
+            "sequence": { "$ref": "#/$defs/localKey" },
+            "defaultPattern": { "type": "string", "maxLength": 128, "examples": ["MM-{yyyy}-{seq:4}"] },
+            "assignOn": { "type": "string", "enum": ["final", "approval_submitted"], "default": "final" }
+          }
+        },
+        "createsActionItems": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fromEntityTypes": { "type": "array", "items": { "type": "string" } },
+            "trigger": { "type": "string", "enum": ["generated", "approved", "final"], "default": "final" }
+          }
+        }
+      }
+    },
+    "workflows": {
+      "type": "object",
+      "required": ["processing"],
+      "additionalProperties": false,
+      "properties": {
+        "processing": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["key", "definition"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "$ref": "#/$defs/localKey" },
+              "definition": { "$ref": "#/$defs/packagePath" },
+              "default": { "type": "boolean", "default": false },
+              "purpose": { "type": "string", "enum": ["job", "additional_artifact", "repeat"], "default": "job" }
+            }
+          }
+        },
+        "approval": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "definition"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "$ref": "#/$defs/localKey" },
+              "definition": { "$ref": "#/$defs/packagePath" },
+              "customizable": { "type": "boolean", "default": true }
+            }
+          }
+        }
+      }
+    },
+    "permission": {
+      "type": "object",
+      "required": ["key", "description", "defaultRoles"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "$ref": "common.schema.json#/$defs/permissionKey" },
+        "description": { "$ref": "common.schema.json#/$defs/localizedString" },
+        "defaultRoles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["owner", "admin", "manager", "member", "viewer", "guest"] }
+        },
+        "resourceScoped": { "type": "boolean", "default": true }
+      }
+    },
+    "entitlements": {
+      "type": "object",
+      "required": ["required"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/entitlementKey" },
+          "description": "Entitlements an organization must hold to install and use the module."
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "gates"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "$ref": "common.schema.json#/$defs/entitlementKey" },
+              "gates": {
+                "type": "array",
+                "items": { "type": "string", "maxLength": 128 },
+                "description": "Module features gated by this entitlement (e.g. 'artifact:follow_up', 'export:docx')."
+              }
+            }
+          }
+        },
+        "meters": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$" },
+          "description": "Usage meters this module is expected to consume (for pricing previews)."
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/aiTask" }
+        },
+        "dataPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sendsSourceContent": { "type": "boolean", "default": true },
+            "allowsExternalProviders": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "aiTask": {
+      "type": "object",
+      "required": ["key", "capability", "profile"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "$ref": "#/$defs/localKey" },
+        "capability": {
+          "type": "string",
+          "enum": ["transcription", "diarization", "structured_extraction", "vision_analysis", "ocr", "handwriting_recognition", "summarization", "classification", "generation", "embedding", "translation"]
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Model profile key (never a provider or model name)."
+        },
+        "quality": { "type": "string", "enum": ["economy", "standard", "high"], "default": "standard" },
+        "languages": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/locale" } },
+        "modalities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["text", "audio", "image", "video"] }
+        },
+        "prompt": { "$ref": "common.schema.json#/$defs/versionedRef" },
+        "outputSchema": { "$ref": "#/$defs/packagePath" },
+        "requiresEvidence": { "type": "boolean", "default": true },
+        "maxCostCredits": { "type": "number", "minimum": 0 }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "suites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "dataset", "metrics"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "$ref": "#/$defs/localKey" },
+              "dataset": { "$ref": "common.schema.json#/$defs/versionedRef" },
+              "tasks": { "type": "array", "items": { "$ref": "#/$defs/localKey" } },
+              "metrics": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["key"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" },
+                    "min": { "type": "number" },
+                    "max": { "type": "number" },
+                    "blocking": { "type": "boolean", "default": true }
+                  }
+                }
+              },
+              "releaseGate": { "type": "boolean", "default": true }
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultConfidenceThreshold": { "$ref": "common.schema.json#/$defs/confidence" },
+        "bands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "high": { "$ref": "common.schema.json#/$defs/confidence" },
+            "medium": { "$ref": "common.schema.json#/$defs/confidence" }
+          }
+        },
+        "requireReviewBeforeArtifact": { "type": "boolean", "default": false }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["generic", "hybrid", "custom"] },
+        "card": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "icon": { "$ref": "#/$defs/packagePath" },
+            "accent": { "type": "string", "pattern": "^[a-z]+$", "description": "Design-token colour name, not a raw colour." },
+            "order": { "type": "integer" }
+          }
+        },
+        "labels": {
+          "type": "object",
+          "description": "Module-specific nouns shown in UI (e.g. job: 'Meeting').",
+          "additionalProperties": { "$ref": "common.schema.json#/$defs/localizedString" }
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["point", "component"],
+            "additionalProperties": false,
+            "properties": {
+              "point": {
+                "type": "string",
+                "enum": ["job.create", "job.capture", "job.review", "artifact.view", "artifact.edit", "artifact.section", "settings.configuration", "project.dashboard"]
+              },
+              "component": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$",
+                "description": "Key of a platform-registered frontend component. No remote code loading."
+              },
+              "fallback": { "type": "string", "enum": ["generic", "hidden"], "default": "generic" }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "generic" } } },
+          "then": { "not": { "required": ["extensions"] } }
+        }
+      ]
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" },
+              "type": { "type": "string", "enum": ["counter", "histogram", "gauge"] },
+              "unit": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "kpis": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["time_to_artifact", "acceptance_rate", "human_correction_rate", "evidence_coverage", "module_activation"] }
+        }
+      }
+    }
+  }
+}

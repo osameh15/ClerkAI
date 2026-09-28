@@ -1,0 +1,3493 @@
+openapi: 3.1.0
+info:
+  title: Clerk AI Platform API
+  version: 1.0.0-draft.1
+  summary: Versioned REST contract for the Clerk AI platform (v1).
+  description: |
+    Initial OpenAPI contract derived from Blueprint Appendix B (API v1 Inventory).
+
+    Conventions (see docs/api):
+    - All tenant-scoped operations require the `Clerk-Organization-Id` header for session
+      principals. API keys are bound to one organization.
+    - Commands marked `x-clerk-idempotency: required` must send `Idempotency-Key`.
+    - Mutable resources return `ETag`; edits require `If-Match` where marked.
+    - Errors use the standard error body (docs/api/errors.md). Codes: docs/api/error-catalog.md.
+    - Lists use cursor pagination (`cursor`, `limit`) and return `{ data, page }`.
+    - Long-running work is asynchronous (202) and observed through Job resources and SSE.
+
+    Operation status extension `x-clerk-status`:
+    - `baseline` — listed in Blueprint App. B.
+    - `refinement` — added to complete a Blueprint flow without contradicting it.
+    - `provisional` — shape depends on an open decision (see docs/governance/open-decisions.md).
+    - `deferred` — reserved; not implemented in v1.
+
+    Canonical JSON Schemas live in docs/api/schemas; component schemas here must stay
+    structurally equivalent (enforced by contract tests).
+  contact:
+    name: Clerk Platform Team
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.clerk.example/v1
+    description: Production (placeholder host)
+  - url: http://localhost:8080/v1
+    description: Local development
+security:
+  - sessionCookie: []
+  - apiKey: []
+tags:
+  - name: Health
+  - name: Auth
+  - name: Me
+  - name: Organizations
+  - name: Teams
+  - name: Access
+  - name: Projects
+  - name: Modules
+  - name: Store
+  - name: Uploads
+  - name: Sources
+  - name: Jobs
+  - name: Knowledge
+  - name: Artifacts
+  - name: Approvals
+  - name: Templates
+  - name: Actions
+  - name: Billing
+  - name: Audit
+  - name: Integrations
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness/readiness summary (public, no tenant data).
+      security: []
+      x-clerk-status: refinement
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  # ---------------------------------------------------------------- Auth
+  /auth/magic-link:
+    post:
+      tags: [Auth]
+      operationId: requestMagicLink
+      summary: Request a magic sign-in link by email.
+      security: []
+      x-clerk-status: provisional
+      x-clerk-open-decision: OD-004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email, maxLength: 320 }
+                redirect_path: { type: string, maxLength: 512, pattern: '^/' }
+      responses:
+        '202':
+          description: Accepted. Response is identical whether or not the email exists.
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/magic-link/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyMagicLink
+      summary: Exchange a magic-link token for a session cookie.
+      security: []
+      x-clerk-status: provisional
+      x-clerk-open-decision: OD-004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              additionalProperties: false
+              properties:
+                token: { type: string, minLength: 16, maxLength: 512 }
+      responses:
+        '200':
+          description: Session established (Set-Cookie). MFA may still be required.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionState'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/oidc/{provider}/start:
+    get:
+      tags: [Auth]
+      operationId: startOidcLogin
+      summary: Begin OIDC login (redirect with state, nonce, PKCE).
+      security: []
+      x-clerk-status: provisional
+      x-clerk-open-decision: OD-004
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z][a-z0-9-]*$' }
+      responses:
+        '302':
+          description: Redirect to identity provider.
+  /auth/oidc/{provider}/callback:
+    get:
+      tags: [Auth]
+      operationId: completeOidcLogin
+      summary: OIDC callback; establishes session and redirects to the app.
+      security: []
+      x-clerk-status: provisional
+      x-clerk-open-decision: OD-004
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z][a-z0-9-]*$' }
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to application with session cookie set.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/mfa/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyMfa
+      summary: Complete MFA challenge for the current session.
+      x-clerk-status: provisional
+      x-clerk-open-decision: OD-004
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [factor_type, code]
+              additionalProperties: false
+              properties:
+                factor_type: { type: string, enum: [totp, webauthn] }
+                code: { type: string, maxLength: 4096 }
+      responses:
+        '200':
+          description: MFA satisfied.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revoke the current session.
+      x-clerk-status: refinement
+      responses:
+        '204': { description: Logged out. }
+
+  # ---------------------------------------------------------------- Me
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      summary: Profile and current context (memberships, active organization, effective permissions summary).
+      x-clerk-status: baseline
+      responses:
+        '200':
+          description: Current principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/sessions:
+    get:
+      tags: [Me]
+      operationId: listMySessions
+      summary: List active sessions for the current user.
+      x-clerk-status: refinement
+      responses:
+        '200':
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+  /me/sessions/{sessionId}:
+    delete:
+      tags: [Me]
+      operationId: revokeMySession
+      summary: Revoke one of the current user's sessions.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204': { description: Revoked. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Organizations
+  /organizations:
+    get:
+      tags: [Organizations]
+      operationId: listOrganizations
+      summary: List organizations (workspaces) the current user belongs to.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Organizations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationList'
+    post:
+      tags: [Organizations]
+      operationId: createOrganization
+      summary: Create a personal or team workspace; caller becomes Owner.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganizationCreate' }
+      responses:
+        '201':
+          description: Created.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /organizations/{organizationId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
+    get:
+      tags: [Organizations]
+      operationId: getOrganization
+      summary: Organization details and settings.
+      x-clerk-status: baseline
+      responses:
+        '200':
+          description: Organization.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Organizations]
+      operationId: updateOrganization
+      summary: Update organization settings.
+      x-clerk-status: baseline
+      x-clerk-permission: organization.settings.manage
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganizationUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+  /organizations/{organizationId}/members:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
+    get:
+      tags: [Organizations]
+      operationId: listMembers
+      summary: List memberships and pending invitations.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string, enum: [invited, active, deactivated] }
+      responses:
+        '200':
+          description: Members.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MembershipList' }
+    post:
+      tags: [Organizations]
+      operationId: inviteMember
+      summary: Invite a member by email with initial roles.
+      x-clerk-status: baseline
+      x-clerk-permission: organization.members.invite
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationCreate' }
+      responses:
+        '201':
+          description: Invitation created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /organizations/{organizationId}/members/{membershipId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
+      - $ref: '#/components/parameters/MembershipId'
+    patch:
+      tags: [Organizations]
+      operationId: updateMember
+      summary: Change roles/scopes of a membership.
+      x-clerk-status: refinement
+      x-clerk-permission: roles.assign
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MembershipUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+    delete:
+      tags: [Organizations]
+      operationId: removeMember
+      summary: Remove/deactivate a membership. Organizational records are preserved.
+      x-clerk-status: baseline
+      x-clerk-permission: organization.members.remove
+      responses:
+        '204': { description: Removed. }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /invitations/{token}/accept:
+    post:
+      tags: [Organizations]
+      operationId: acceptInvitation
+      summary: Accept an invitation as the signed-in user.
+      x-clerk-status: refinement
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 512 }
+      responses:
+        '200':
+          description: Membership activated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  # ---------------------------------------------------------------- Teams
+  /teams:
+    get:
+      tags: [Teams]
+      operationId: listTeams
+      summary: List teams in the active organization.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Teams.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TeamList' }
+    post:
+      tags: [Teams]
+      operationId: createTeam
+      summary: Create a team.
+      x-clerk-status: baseline
+      x-clerk-permission: organization.teams.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeamCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Team' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /teams/{teamId}/members:
+    post:
+      tags: [Teams]
+      operationId: addTeamMember
+      summary: Add a membership to a team.
+      x-clerk-status: refinement
+      x-clerk-permission: organization.teams.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/TeamId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membership_id]
+              additionalProperties: false
+              properties:
+                membership_id: { $ref: '#/components/schemas/Uuid' }
+                team_role: { type: string, enum: [member, lead], default: member }
+      responses:
+        '204': { description: Added. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Access
+  /roles:
+    get:
+      tags: [Access]
+      operationId: listRoles
+      summary: System and custom roles.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Role' }
+    post:
+      tags: [Access]
+      operationId: createRole
+      summary: Create a custom role (entitlement roles.custom).
+      x-clerk-status: baseline
+      x-clerk-permission: roles.manage
+      x-clerk-entitlement: roles.custom
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Role' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /roles/{roleId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - $ref: '#/components/parameters/RoleId'
+    patch:
+      tags: [Access]
+      operationId: updateRole
+      summary: Update a custom role's permissions.
+      x-clerk-status: refinement
+      x-clerk-permission: roles.manage
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleCreate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Role' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Access]
+      operationId: deleteRole
+      summary: Delete a custom role not assigned to any membership.
+      x-clerk-status: refinement
+      x-clerk-permission: roles.manage
+      responses:
+        '204': { description: Deleted. }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /permissions:
+    get:
+      tags: [Access]
+      operationId: listPermissions
+      summary: Permission catalog (platform + installed modules).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Permissions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Permission' }
+
+  # ---------------------------------------------------------------- Projects
+  /projects:
+    get:
+      tags: [Projects]
+      operationId: listProjects
+      summary: List projects visible to the caller.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, archived] }
+      responses:
+        '200':
+          description: Projects.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+    post:
+      tags: [Projects]
+      operationId: createProject
+      summary: Create a project.
+      x-clerk-status: baseline
+      x-clerk-permission: projects.create
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+  /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      operationId: getProject
+      summary: Project overview.
+      x-clerk-status: refinement
+      responses:
+        '200':
+          description: Project.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Projects]
+      operationId: updateProject
+      summary: Update or archive a project.
+      x-clerk-status: refinement
+      x-clerk-permission: projects.manage
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+
+  # ---------------------------------------------------------------- Modules (installed)
+  /modules:
+    get:
+      tags: [Modules]
+      operationId: listModules
+      summary: Installed and available modules for the current user, with launch state (drives Home cards).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: view
+          in: query
+          schema: { type: string, enum: [launcher, manage], default: launcher }
+      responses:
+        '200':
+          description: Modules.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ModuleCard' }
+  /modules/{moduleKey}:
+    get:
+      tags: [Modules]
+      operationId: getModuleInstallation
+      summary: Installation details for a module in the active organization.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+      responses:
+        '200':
+          description: Installation.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleInstallation' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /modules/{moduleKey}/install:
+    post:
+      tags: [Modules]
+      operationId: installModule
+      summary: Start installation workflow (entitlement, dependencies, compatibility, permission/workflow/template registration).
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: modules.install
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModuleInstallRequest' }
+      responses:
+        '202':
+          description: Installation accepted; operation runs asynchronously.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleOperation' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /modules/{moduleKey}/enable:
+    post:
+      tags: [Modules]
+      operationId: enableModule
+      summary: Enable a disabled installation.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: modules.install
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Enabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleInstallation' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /modules/{moduleKey}/disable:
+    post:
+      tags: [Modules]
+      operationId: disableModule
+      summary: Disable — blocks new Jobs; historical data stays readable. Not equivalent to uninstall.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: modules.install
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleInstallation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /modules/{moduleKey}/upgrade:
+    post:
+      tags: [Modules]
+      operationId: upgradeModule
+      summary: Upgrade installation to a compatible version.
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      x-clerk-permission: modules.install
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_version]
+              additionalProperties: false
+              properties:
+                target_version: { $ref: '#/components/schemas/SemVer' }
+      responses:
+        '202':
+          description: Upgrade accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleOperation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /modules/{moduleKey}/uninstall:
+    post:
+      tags: [Modules]
+      operationId: uninstallModule
+      summary: Logically remove installation; historical artifacts remain per retention policy.
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      x-clerk-permission: modules.install
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Uninstall accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleOperation' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /modules/{moduleKey}/configuration:
+    get:
+      tags: [Modules]
+      operationId: getModuleConfiguration
+      summary: Current configuration, schema and UI hints.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+      responses:
+        '200':
+          description: Configuration.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleConfiguration' }
+    patch:
+      tags: [Modules]
+      operationId: updateModuleConfiguration
+      summary: Replace configuration values (validated against module configuration schema); creates a new configuration version.
+      x-clerk-status: baseline
+      x-clerk-permission: modules.configure
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [config]
+              additionalProperties: false
+              properties:
+                config: { type: object }
+      responses:
+        '200':
+          description: New configuration version.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModuleConfiguration' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+
+  # ---------------------------------------------------------------- Store
+  /store/modules:
+    get:
+      tags: [Store]
+      operationId: listStoreModules
+      summary: Module Store catalog (discover, category, search, installed, updates).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: category
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: filter
+          in: query
+          schema: { type: string, enum: [all, installed, updates] }
+      responses:
+        '200':
+          description: Catalog page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoreModuleList' }
+  /store/modules/{moduleKey}:
+    get:
+      tags: [Store]
+      operationId: getStoreModule
+      summary: Module detail (publisher, inputs, outputs, pricing/entitlement, versions, install state).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ModuleKey'
+      responses:
+        '200':
+          description: Module detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoreModuleDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Uploads & Sources
+  /uploads:
+    post:
+      tags: [Uploads]
+      operationId: createUploadSession
+      summary: Create upload session and presigned URL(s). Bytes go directly to object storage.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: sources.create
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadSessionCreate' }
+      responses:
+        '201':
+          description: Upload session with presigned part URLs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /uploads/{uploadId}:
+    get:
+      tags: [Uploads]
+      operationId: getUploadSession
+      summary: Upload session status; refreshes presigned URLs for incomplete parts (resume).
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/UploadId'
+        - name: refresh_parts
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /uploads/{uploadId}/complete:
+    post:
+      tags: [Uploads]
+      operationId: completeUpload
+      summary: Confirm upload, verify size/checksum, create Source, start scanning and ingestion.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/UploadId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadComplete' }
+      responses:
+        '201':
+          description: Source created (status scanning).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /uploads/{uploadId}/abort:
+    post:
+      tags: [Uploads]
+      operationId: abortUpload
+      summary: Abort an in-progress upload session.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '204': { description: Aborted. }
+  /sources:
+    get:
+      tags: [Sources]
+      operationId: listSources
+      summary: Source inbox.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+        - name: kind
+          in: query
+          schema: { $ref: '#/components/schemas/SourceKind' }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: project_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: unattached
+          in: query
+          description: Only Sources not attached to any Job.
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Sources.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceList' }
+    post:
+      tags: [Sources]
+      operationId: createTextSource
+      summary: Create a small text/manual-note Source without an upload session.
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      x-clerk-permission: sources.create
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TextSourceCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Source' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+  /sources/{sourceId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - $ref: '#/components/parameters/SourceId'
+    get:
+      tags: [Sources]
+      operationId: getSource
+      summary: Source metadata and extractions.
+      x-clerk-status: baseline
+      responses:
+        '200':
+          description: Source.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Sources]
+      operationId: deleteSource
+      summary: Delete according to policy (asynchronous, audited).
+      x-clerk-status: baseline
+      x-clerk-permission: sources.delete
+      responses:
+        '202': { description: Deletion scheduled. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /sources/{sourceId}/files/{fileId}/url:
+    get:
+      tags: [Sources]
+      operationId: getSourceFileUrl
+      summary: Short-lived presigned GET URL for an original or rendition (evidence viewer, preview).
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/SourceId'
+        - name: fileId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignedUrl' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Jobs
+  /jobs:
+    get:
+      tags: [Jobs]
+      operationId: listJobs
+      summary: List and filter Jobs.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+        - name: module_key
+          in: query
+          schema: { $ref: '#/components/schemas/ModuleKey' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/JobStatus' }
+        - name: created_by
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: project_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Jobs.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobList' }
+    post:
+      tags: [Jobs]
+      operationId: createJob
+      summary: Create a Draft Job for an installed, enabled module.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: jobs.create
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobCreate' }
+      responses:
+        '201':
+          description: Draft created.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /jobs/{jobId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Job with status, sources, runs summary and artifacts.
+      x-clerk-status: baseline
+      responses:
+        '200':
+          description: Job.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Jobs]
+      operationId: updateJob
+      summary: Edit Draft metadata and job input (draft/ready only).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /jobs/{jobId}/sources:
+    post:
+      tags: [Jobs]
+      operationId: attachJobSource
+      summary: Attach an existing Source to a Draft Job (does not submit).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobSourceAttach' }
+      responses:
+        '200':
+          description: Attached; returns updated Job (may become ready).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /jobs/{jobId}/sources/{sourceId}:
+    delete:
+      tags: [Jobs]
+      operationId: detachJobSource
+      summary: Detach a Source while the Job is draft/ready.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/SourceId'
+      responses:
+        '200':
+          description: Detached.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /jobs/{jobId}/submit:
+    post:
+      tags: [Jobs]
+      operationId: submitJob
+      summary: Start processing; pins module/workflow/configuration versions. Idempotent.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /jobs/{jobId}/cancel:
+    post:
+      tags: [Jobs]
+      operationId: cancelJob
+      summary: Cancel a Job (draft, ready, queued, processing or needs_review).
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Cancellation accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /jobs/{jobId}/retry:
+    post:
+      tags: [Jobs]
+      operationId: retryJob
+      summary: Authorized retry of a failed Job (new ProcessingRun).
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Re-queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /jobs/{jobId}/events:
+    get:
+      tags: [Jobs]
+      operationId: streamJobEvents
+      summary: SSE processing stream. Supports Last-Event-ID replay.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - name: Last-Event-ID
+          in: header
+          schema: { type: string, maxLength: 64 }
+      responses:
+        '200':
+          description: Event stream (see docs/api/sse.md). Each `data:` line is a JobStreamEvent JSON.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /jobs/{jobId}/runs:
+    get:
+      tags: [Jobs]
+      operationId: listJobRuns
+      summary: Processing runs with step progress (user-safe summary).
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProcessingRun' }
+  /jobs/{jobId}/review-items:
+    get:
+      tags: [Knowledge]
+      operationId: listJobReviewItems
+      summary: Review-required items for a Job.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, dismissed, superseded] }
+      responses:
+        '200':
+          description: Review items.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewItemList' }
+  /jobs/{jobId}/knowledge:
+    get:
+      tags: [Knowledge]
+      operationId: getJobKnowledge
+      summary: Knowledge entities and relations for a Job (with review state and confidence).
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - name: entity_type
+          in: query
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Knowledge graph for the Job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnowledgeGraph' }
+  /jobs/{jobId}/artifacts:
+    post:
+      tags: [Artifacts]
+      operationId: generateAdditionalArtifact
+      summary: Generate an additional (on-demand) artifact type from the Job's existing Knowledge (e.g. Handwriting → Formal Letter).
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [artifact_type]
+              additionalProperties: false
+              properties:
+                artifact_type: { type: string, pattern: '^[a-z][a-z0-9_-]*$' }
+                template_key: { type: string, maxLength: 64 }
+                options: { type: object }
+      responses:
+        '202':
+          description: Generation queued as a new ProcessingRun.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /review-items/{reviewItemId}/resolve:
+    post:
+      tags: [Knowledge]
+      operationId: resolveReviewItem
+      summary: Confirm, edit or reject a review item.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ReviewItemId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewResolve' }
+      responses:
+        '200':
+          description: Resolved.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewItem' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /evidence:
+    get:
+      tags: [Knowledge]
+      operationId: listEvidence
+      summary: Evidence links for a Knowledge item or Artifact field.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: target_type
+          in: query
+          required: true
+          schema: { type: string, enum: [entity, relation, artifact_field] }
+        - name: target_id
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: path
+          in: query
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Evidence links.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Evidence' }
+
+  # ---------------------------------------------------------------- Artifacts
+  /artifacts:
+    get:
+      tags: [Artifacts]
+      operationId: listArtifacts
+      summary: List Artifacts.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+        - name: module_key
+          in: query
+          schema: { $ref: '#/components/schemas/ModuleKey' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ArtifactStatus' }
+        - name: job_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: project_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: Artifacts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactList' }
+  /artifacts/{artifactId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - $ref: '#/components/parameters/ArtifactId'
+    get:
+      tags: [Artifacts]
+      operationId: getArtifact
+      summary: Artifact with current version content.
+      x-clerk-status: baseline
+      responses:
+        '200':
+          description: Artifact.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactWithContent' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Artifacts]
+      operationId: editArtifact
+      summary: Optimistic-concurrency edit; creates a new ArtifactVersion (origin=human).
+      x-clerk-status: baseline
+      x-clerk-permission: artifacts.edit
+      parameters:
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArtifactEdit' }
+      responses:
+        '200':
+          description: New version created.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactWithContent' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+  /artifacts/{artifactId}/versions:
+    get:
+      tags: [Artifacts]
+      operationId: listArtifactVersions
+      summary: Version history (AI/human/system provenance).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ArtifactId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Versions (metadata; content via version endpoint).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactVersionList' }
+  /artifacts/{artifactId}/versions/{versionId}:
+    get:
+      tags: [Artifacts]
+      operationId: getArtifactVersion
+      summary: A specific immutable version with content.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ArtifactId'
+        - name: versionId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /artifacts/{artifactId}/exports:
+    post:
+      tags: [Artifacts]
+      operationId: createArtifactExport
+      summary: Async PDF/DOCX export of a version with a template.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: artifacts.export
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ArtifactId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '202':
+          description: Export queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactExport' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /exports/{exportId}:
+    get:
+      tags: [Artifacts]
+      operationId: getExport
+      summary: Export status and short-lived download URL when complete.
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: exportId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Export.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArtifactExport' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /artifacts/{artifactId}/submit-for-approval:
+    post:
+      tags: [Approvals]
+      operationId: submitArtifactForApproval
+      summary: Enter approval workflow for the current version.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-entitlement: workflow.approval
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ArtifactId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                workflow_key: { type: string, maxLength: 64 }
+                message: { type: string, maxLength: 2000 }
+      responses:
+        '202':
+          description: Workflow instance started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkflowInstance' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /artifacts/{artifactId}/finalize:
+    post:
+      tags: [Approvals]
+      operationId: finalizeArtifact
+      summary: Finalize an artifact — allocates the document number and locks the version. Allowed from `approved`, or from `draft` when the module/organization does not require approval.
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      x-clerk-permission: artifacts.edit
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/ArtifactId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatchRequired'
+      responses:
+        '200':
+          description: Finalized.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Artifact' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      summary: Approval requests assigned to the caller (or all, for admins).
+      x-clerk-status: refinement
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, approved, rejected, changes_requested, cancelled, expired, superseded] }
+        - name: assigned_to
+          in: query
+          schema: { type: string, enum: [me, any], default: me }
+      responses:
+        '200':
+          description: Approval requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalRequestList' }
+  /approvals/{approvalId}/decision:
+    post:
+      tags: [Approvals]
+      operationId: decideApproval
+      summary: Approve, reject or request changes.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: approvalId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecisionCreate' }
+      responses:
+        '200':
+          description: Decision recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ---------------------------------------------------------------- Templates
+  /templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      summary: Organization template catalog (module defaults + custom).
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: artifact_type
+          in: query
+          schema: { type: string }
+        - name: module_key
+          in: query
+          schema: { $ref: '#/components/schemas/ModuleKey' }
+      responses:
+        '200':
+          description: Templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Template' }
+    post:
+      tags: [Templates]
+      operationId: createTemplate
+      summary: Create a custom template (entitlement template.custom).
+      x-clerk-status: baseline
+      x-clerk-permission: templates.manage
+      x-clerk-entitlement: template.custom
+      x-clerk-open-decision: OD-038
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TemplateCreate' }
+      responses:
+        '201':
+          description: Created (draft version).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Template' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+  /brand-kit:
+    get:
+      tags: [Templates]
+      operationId: getBrandKit
+      summary: Current Brand Kit.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Brand kit.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BrandKit' }
+    patch:
+      tags: [Templates]
+      operationId: updateBrandKit
+      summary: Update Brand Kit (creates a new brand kit version).
+      x-clerk-status: baseline
+      x-clerk-permission: templates.manage
+      x-clerk-entitlement: template.custom
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BrandKitUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BrandKit' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  # ---------------------------------------------------------------- Actions
+  /actions:
+    get:
+      tags: [Actions]
+      operationId: listActions
+      summary: Action Items.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Sort'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ActionStatus' }
+        - name: overdue
+          in: query
+          schema: { type: boolean }
+        - name: owner
+          in: query
+          schema: { type: string, description: "'me' or a membership id" }
+        - name: project_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Actions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActionItemList' }
+    post:
+      tags: [Actions]
+      operationId: createAction
+      summary: Create a manual Action Item.
+      x-clerk-status: baseline
+      x-clerk-permission: actions.create
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActionItemCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActionItem' }
+  /actions/{actionId}:
+    patch:
+      tags: [Actions]
+      operationId: updateAction
+      summary: Update status / owner / deadline.
+      x-clerk-status: baseline
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: actionId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActionItemUpdate' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActionItem' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  # ---------------------------------------------------------------- Billing
+  /usage:
+    get:
+      tags: [Billing]
+      operationId: getUsage
+      summary: Usage and quota in customer-facing units (AI Credits, minutes, pages, storage).
+      x-clerk-status: baseline
+      x-clerk-permission: billing.view
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: period
+          in: query
+          schema: { type: string, enum: [current, previous], default: current }
+      responses:
+        '200':
+          description: Usage summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageSummary' }
+  /subscription:
+    get:
+      tags: [Billing]
+      operationId: getSubscription
+      summary: Plan, seats, add-ons and entitlements summary.
+      x-clerk-status: baseline
+      x-clerk-permission: billing.view
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Subscription.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+  /subscription/change:
+    post:
+      tags: [Billing]
+      operationId: changeSubscription
+      summary: Change plan/seats/add-ons (payment provider dependent).
+      x-clerk-status: deferred
+      x-clerk-open-decision: OD-010
+      x-clerk-idempotency: required
+      x-clerk-permission: billing.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                plan_key: { type: string }
+                seats: { type: integer, minimum: 1 }
+                addons:
+                  type: array
+                  items: { type: string }
+      responses:
+        '202':
+          description: Change accepted (may require checkout).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+
+  # ---------------------------------------------------------------- Audit
+  /audit:
+    get:
+      tags: [Audit]
+      operationId: queryAudit
+      summary: Audit query by actor/action/resource/time (entitlement audit.log).
+      x-clerk-status: baseline
+      x-clerk-permission: audit.view
+      x-clerk-entitlement: audit.log
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: actor_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: action
+          in: query
+          schema: { type: string, maxLength: 128 }
+        - name: resource_type
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - name: resource_id
+          in: query
+          schema: { $ref: '#/components/schemas/Uuid' }
+        - name: from
+          in: query
+          schema: { $ref: '#/components/schemas/Timestamp' }
+        - name: to
+          in: query
+          schema: { $ref: '#/components/schemas/Timestamp' }
+      responses:
+        '200':
+          description: Audit events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventList' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /audit/exports:
+    post:
+      tags: [Audit]
+      operationId: exportAudit
+      summary: Asynchronous audit export (entitlement audit.export).
+      x-clerk-status: refinement
+      x-clerk-idempotency: required
+      x-clerk-permission: audit.export
+      x-clerk-entitlement: audit.export
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              additionalProperties: false
+              properties:
+                from: { $ref: '#/components/schemas/Timestamp' }
+                to: { $ref: '#/components/schemas/Timestamp' }
+                format: { type: string, enum: [jsonl, csv], default: jsonl }
+      responses:
+        '202': { description: Export scheduled; delivered via notification with signed URL. }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  # ---------------------------------------------------------------- Integrations
+  /api-keys:
+    get:
+      tags: [Integrations]
+      operationId: listApiKeys
+      summary: Scoped API keys (secrets never returned).
+      x-clerk-status: baseline
+      x-clerk-permission: integrations.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ApiKey' }
+    post:
+      tags: [Integrations]
+      operationId: createApiKey
+      summary: Create a scoped API key; the secret is shown once.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: integrations.manage
+      x-clerk-entitlement: api.access
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApiKeyCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyCreated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+  /api-keys/{apiKeyId}:
+    delete:
+      tags: [Integrations]
+      operationId: revokeApiKey
+      summary: Revoke an API key.
+      x-clerk-status: refinement
+      x-clerk-permission: integrations.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: apiKeyId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '204': { description: Revoked. }
+  /webhooks:
+    get:
+      tags: [Integrations]
+      operationId: listWebhooks
+      summary: Webhook endpoints.
+      x-clerk-status: baseline
+      x-clerk-permission: integrations.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+      responses:
+        '200':
+          description: Endpoints.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/WebhookEndpoint' }
+    post:
+      tags: [Integrations]
+      operationId: createWebhook
+      summary: Register an HTTPS webhook endpoint; signing secret shown once.
+      x-clerk-status: baseline
+      x-clerk-idempotency: required
+      x-clerk-permission: integrations.manage
+      x-clerk-entitlement: api.webhooks
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookEndpointCreate' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpointCreated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+  /webhooks/{webhookId}:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationHeader'
+      - name: webhookId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Uuid' }
+    delete:
+      tags: [Integrations]
+      operationId: deleteWebhook
+      summary: Delete an endpoint (deliveries stop immediately).
+      x-clerk-status: refinement
+      x-clerk-permission: integrations.manage
+      responses:
+        '204': { description: Deleted. }
+  /webhooks/{webhookId}/rotate-secret:
+    post:
+      tags: [Integrations]
+      operationId: rotateWebhookSecret
+      summary: Rotate signing secret (old secret valid for an overlap window).
+      x-clerk-status: refinement
+      x-clerk-permission: integrations.manage
+      parameters:
+        - $ref: '#/components/parameters/OrganizationHeader'
+        - name: webhookId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: New secret (shown once).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookEndpointCreated' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-clerk_session
+      description: HttpOnly, Secure, SameSite=Lax session cookie. Unsafe methods also require X-CSRF-Token.
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: ck_live_<prefix>_<secret>
+      description: Scoped organization API key (docs/api/api-keys.md).
+
+  headers:
+    ETag:
+      description: Entity tag for optimistic concurrency ("v<row_version>").
+      schema: { type: string }
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: { type: integer, minimum: 0 }
+    RequestId:
+      description: Request identifier echoed in error bodies.
+      schema: { type: string }
+
+  parameters:
+    OrganizationHeader:
+      name: Clerk-Organization-Id
+      in: header
+      required: false
+      description: Active organization for session principals (required for tenant-scoped operations with session auth; ignored or must match for API keys).
+      schema: { $ref: '#/components/schemas/Uuid' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated unique key (UUID recommended), 8–128 chars. Stored 24h.
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: ETag of the resource version being modified. Required where documented.
+      schema: { type: string }
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    Sort:
+      name: sort
+      in: query
+      description: Comma-separated fields; '-' prefix for descending (e.g. -created_at). Allowed fields are documented per resource.
+      schema: { type: string, maxLength: 128, pattern: '^-?[a-z_]+(,-?[a-z_]+)*$' }
+    OrganizationId:
+      name: organizationId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    MembershipId:
+      name: membershipId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    TeamId:
+      name: teamId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    RoleId:
+      name: roleId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ModuleKey:
+      name: moduleKey
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ModuleKey' }
+    UploadId:
+      name: uploadId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ReviewItemId:
+      name: reviewItemId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Not authenticated (AUTH_*).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PaymentRequired:
+      description: Entitlement or quota missing (MODULE_NOT_ENTITLED, BILLING_*). Response meta names the entitlement.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Permission or resource policy denied (ACCESS_*).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found or not visible in this tenant (never reveals existence across tenants).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: State conflict (invalid transition, duplicate, idempotency in progress).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Gone:
+      description: Expired resource (upload session, invitation).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PreconditionFailed:
+      description: If-Match does not match current version.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PreconditionRequired:
+      description: If-Match header required.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: Size limit exceeded.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: File type not accepted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: Semantically invalid (VALIDATION_*, schema violations, readiness).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TooManyRequests:
+      description: Rate limit exceeded (RATE_LIMITED).
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    # ------------------------------------------------ primitives
+    Uuid:
+      type: string
+      format: uuid
+    Timestamp:
+      type: string
+      format: date-time
+    SemVer:
+      type: string
+      pattern: '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
+    ModuleKey:
+      type: string
+      pattern: '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*$'
+      maxLength: 128
+    LocalizedString:
+      type: object
+      additionalProperties: { type: string }
+      required: [en]
+    PageInfo:
+      type: object
+      required: [has_more]
+      properties:
+        next_cursor: { type: [string, 'null'] }
+        has_more: { type: boolean }
+    Actor:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [user, api_key, system, ai, platform_admin, remote_module] }
+        id: { type: [string, 'null'], format: uuid }
+        display: { type: string }
+    Error:
+      description: Mirrors docs/api/schemas/error.schema.json.
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: { type: string, pattern: '^[A-Z]+(?:_[A-Z0-9]+)+$' }
+            message: { type: string }
+            request_id: { type: string }
+            retryable: { type: boolean }
+            details:
+              type: array
+              items:
+                type: object
+                required: [code]
+                properties:
+                  code: { type: string }
+                  field: { type: string }
+                  message: { type: string }
+                  meta: { type: object }
+            meta: { type: object }
+            doc_url: { type: string, format: uri }
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+
+    # ------------------------------------------------ identity / org
+    SessionState:
+      type: object
+      required: [authenticated, mfa_required]
+      properties:
+        authenticated: { type: boolean }
+        mfa_required: { type: boolean }
+        user_id: { $ref: '#/components/schemas/Uuid' }
+    Session:
+      type: object
+      required: [id, created_at, last_seen_at, current]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        last_seen_at: { $ref: '#/components/schemas/Timestamp' }
+        device: { type: string }
+        current: { type: boolean }
+    Me:
+      type: object
+      required: [user, memberships]
+      properties:
+        user:
+          type: object
+          required: [id, email, display_name, locale]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            email: { type: string, format: email }
+            display_name: { type: string }
+            locale: { type: string }
+            timezone: { type: string }
+            mfa_enabled: { type: boolean }
+        memberships:
+          type: array
+          items:
+            type: object
+            required: [organization_id, organization_name, kind, roles]
+            properties:
+              organization_id: { $ref: '#/components/schemas/Uuid' }
+              organization_name: { type: string }
+              kind: { type: string, enum: [personal, team] }
+              roles: { type: array, items: { type: string } }
+        active_organization_id: { type: [string, 'null'], format: uuid }
+        effective_permissions:
+          type: array
+          description: Permissions in the active organization at organization scope (UI hints only; server re-checks).
+          items: { type: string }
+    Organization:
+      type: object
+      required: [id, slug, name, kind, status, locale, timezone, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        slug: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [personal, team] }
+        status: { type: string, enum: [active, suspended, pending_deletion] }
+        locale: { type: string }
+        timezone: { type: string }
+        data_region: { type: string }
+        settings: { type: object }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    OrganizationCreate:
+      type: object
+      required: [name, kind]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        slug: { type: string, pattern: '^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$' }
+        kind: { type: string, enum: [personal, team] }
+        locale: { type: string, default: fa }
+        timezone: { type: string, default: Asia/Tehran }
+    OrganizationUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        locale: { type: string }
+        timezone: { type: string }
+        settings: { type: object }
+    OrganizationList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Organization' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    Membership:
+      type: object
+      required: [id, organization_id, status, roles]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        organization_id: { $ref: '#/components/schemas/Uuid' }
+        user_id: { type: [string, 'null'], format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        status: { type: string, enum: [invited, active, deactivated, removed] }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleAssignment' }
+        joined_at: { type: [string, 'null'], format: date-time }
+    MembershipList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Membership' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    MembershipUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/RoleAssignment' }
+        status: { type: string, enum: [active, deactivated] }
+    InvitationCreate:
+      type: object
+      required: [email, roles]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email }
+        roles:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RoleAssignment' }
+        team_ids:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+    RoleAssignment:
+      type: object
+      required: [role_key]
+      properties:
+        role_key: { type: string }
+        scope_type: { type: string, enum: [organization, team, project], default: organization }
+        scope_id: { type: [string, 'null'], format: uuid }
+    Team:
+      type: object
+      required: [id, name]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        description: { type: string }
+        member_count: { type: integer }
+    TeamCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+    TeamList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Team' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    Role:
+      type: object
+      required: [id, key, name, is_system, permissions]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        key: { type: string }
+        name: { type: string }
+        description: { type: string }
+        is_system: { type: boolean }
+        permissions: { type: array, items: { type: string } }
+    RoleCreate:
+      type: object
+      required: [key, name, permissions]
+      additionalProperties: false
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9_-]{1,63}$' }
+        name: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        based_on: { type: string }
+        permissions:
+          type: array
+          items: { type: string, pattern: '^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$' }
+    Permission:
+      type: object
+      required: [key, source, description]
+      properties:
+        key: { type: string }
+        source: { type: string, enum: [platform, module] }
+        module_key: { type: [string, 'null'] }
+        description: { $ref: '#/components/schemas/LocalizedString' }
+    Project:
+      type: object
+      required: [id, name, status, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        code: { type: string }
+        status: { type: string, enum: [active, archived] }
+        description: { type: string }
+        metadata: { type: object }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    ProjectCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 200 }
+        code: { type: string, maxLength: 32 }
+        description: { type: string, maxLength: 2000 }
+        metadata: { type: object }
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 200 }
+        status: { type: string, enum: [active, archived] }
+        description: { type: string, maxLength: 2000 }
+        metadata: { type: object }
+    ProjectList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Project' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+
+    # ------------------------------------------------ modules / store
+    ModuleCard:
+      type: object
+      description: Launcher card state. Cards are never hard-coded in the frontend.
+      required: [key, name, installed, launch_state]
+      properties:
+        key: { $ref: '#/components/schemas/ModuleKey' }
+        name: { $ref: '#/components/schemas/LocalizedString' }
+        description: { $ref: '#/components/schemas/LocalizedString' }
+        icon_url: { type: string, format: uri }
+        accent: { type: string }
+        order: { type: integer }
+        installed: { type: boolean }
+        installation_status: { type: [string, 'null'], enum: [enabled, disabled, suspended, null] }
+        version: { type: [string, 'null'] }
+        launch_state:
+          type: string
+          description: available = can create jobs; entitlement_required = show upgrade; permission_denied = hide/disable; disabled/suspended = informational.
+          enum: [available, entitlement_required, permission_denied, disabled, suspended, not_installed]
+        labels: { type: object, additionalProperties: { $ref: '#/components/schemas/LocalizedString' } }
+        ui_mode: { type: string, enum: [generic, hybrid, custom] }
+        upgrade_available: { type: boolean }
+    ModuleInstallation:
+      type: object
+      required: [id, module_key, version, status, version_policy]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        module_key: { $ref: '#/components/schemas/ModuleKey' }
+        version: { $ref: '#/components/schemas/SemVer' }
+        status: { type: string, enum: [enabled, disabled, suspended, uninstalled] }
+        version_policy: { type: string, enum: [pinned, auto_patch, auto_minor] }
+        suspension_reason: { type: [string, 'null'] }
+        upgrade_available: { type: [string, 'null'] }
+        upgrade_required_by: { type: [string, 'null'], format: date-time }
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              assignee_type: { type: string, enum: [team, project, membership] }
+              assignee_id: { $ref: '#/components/schemas/Uuid' }
+        installed_at: { $ref: '#/components/schemas/Timestamp' }
+    ModuleInstallRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        version: { $ref: '#/components/schemas/SemVer' }
+        version_policy: { type: string, enum: [pinned, auto_patch, auto_minor], default: auto_patch }
+        config: { type: object }
+        assignments:
+          type: array
+          items:
+            type: object
+            required: [assignee_type, assignee_id]
+            properties:
+              assignee_type: { type: string, enum: [team, project, membership] }
+              assignee_id: { $ref: '#/components/schemas/Uuid' }
+    ModuleOperation:
+      type: object
+      required: [id, operation, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        operation: { type: string, enum: [install, upgrade, uninstall] }
+        status: { type: string, enum: [pending, running, succeeded, failed] }
+        from_version: { type: [string, 'null'] }
+        to_version: { type: [string, 'null'] }
+        error: { oneOf: [{ $ref: '#/components/schemas/Error' }, { type: 'null' }] }
+    ModuleConfiguration:
+      type: object
+      required: [version, config, schema]
+      properties:
+        version: { type: integer }
+        config: { type: object }
+        schema: { type: object, description: JSON Schema of configuration }
+        ui_schema: { type: object }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    StoreModule:
+      type: object
+      required: [key, name, publisher, category, latest_version]
+      properties:
+        key: { $ref: '#/components/schemas/ModuleKey' }
+        name: { $ref: '#/components/schemas/LocalizedString' }
+        summary: { $ref: '#/components/schemas/LocalizedString' }
+        publisher:
+          type: object
+          required: [key, name, verified]
+          properties:
+            key: { type: string }
+            name: { type: string }
+            verified: { type: boolean }
+        category: { type: string }
+        latest_version: { $ref: '#/components/schemas/SemVer' }
+        installed_version: { type: [string, 'null'] }
+        entitled: { type: boolean }
+        pricing_hint: { type: string }
+    StoreModuleDetail:
+      allOf:
+        - $ref: '#/components/schemas/StoreModule'
+        - type: object
+          properties:
+            description_md: { type: string }
+            inputs: { type: array, items: { type: object } }
+            outputs: { type: array, items: { type: object } }
+            required_entitlements: { type: array, items: { type: string } }
+            permissions: { type: array, items: { $ref: '#/components/schemas/Permission' } }
+            versions:
+              type: array
+              items:
+                type: object
+                properties:
+                  version: { $ref: '#/components/schemas/SemVer' }
+                  status: { type: string, enum: [published, deprecated, yanked] }
+                  published_at: { $ref: '#/components/schemas/Timestamp' }
+            dependencies: { type: array, items: { type: object } }
+    StoreModuleList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/StoreModule' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+
+    # ------------------------------------------------ uploads / sources
+    SourceKind:
+      type: string
+      enum: [audio, video, image, document, spreadsheet, presentation, text]
+    UploadSessionCreate:
+      type: object
+      required: [filename, size_bytes, content_type]
+      additionalProperties: false
+      properties:
+        filename: { type: string, minLength: 1, maxLength: 255 }
+        size_bytes: { type: integer, minimum: 1 }
+        content_type: { type: string, maxLength: 255 }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        multipart: { type: boolean, default: false }
+        part_size_bytes: { type: integer, minimum: 5242880 }
+        project_id: { $ref: '#/components/schemas/Uuid' }
+        captured_at: { $ref: '#/components/schemas/Timestamp' }
+        capture_location:
+          type: object
+          properties:
+            lat: { type: number }
+            lng: { type: number }
+            accuracy_m: { type: number }
+        client_ref: { type: string, maxLength: 64, description: Offline temporary id (tmp_...) }
+        job_id: { $ref: '#/components/schemas/Uuid' }
+        job_slot: { type: string, maxLength: 64 }
+        capture_metadata:
+          type: object
+          additionalProperties: false
+          description: Client capture context used by fusion (capture groups) and repeat inspection links.
+          properties:
+            capture_group_id: { type: string, maxLength: 64 }
+            linked_item_ref: { type: string, maxLength: 64, description: Previous issue/action reference for explicit before/after linking }
+            note: { type: string, maxLength: 2000 }
+    UploadSession:
+      type: object
+      required: [id, status, expires_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        status: { type: string, enum: [created, uploading, completed, expired, aborted, failed] }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+        upload_url: { type: string, format: uri, description: Single-part presigned PUT URL }
+        required_headers: { type: object, additionalProperties: { type: string } }
+        parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, url]
+            properties:
+              part_number: { type: integer, minimum: 1 }
+              url: { type: string, format: uri }
+              completed: { type: boolean }
+        source_id: { type: [string, 'null'], format: uuid }
+    UploadComplete:
+      type: object
+      required: [sha256]
+      additionalProperties: false
+      properties:
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, etag]
+            properties:
+              part_number: { type: integer, minimum: 1 }
+              etag: { type: string }
+        title: { type: string, maxLength: 300 }
+        language_hint: { type: string }
+    TextSourceCreate:
+      type: object
+      required: [text]
+      additionalProperties: false
+      properties:
+        text: { type: string, minLength: 1, maxLength: 200000 }
+        title: { type: string, maxLength: 300 }
+        language_hint: { type: string }
+        project_id: { $ref: '#/components/schemas/Uuid' }
+        client_ref: { type: string, maxLength: 64 }
+    Source:
+      type: object
+      required: [id, kind, status, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        kind: { $ref: '#/components/schemas/SourceKind' }
+        status:
+          type: string
+          enum: [scanning, quarantined, rejected, available, processing, processed, partially_processed, deleting, deleted]
+        title: { type: string }
+        original_filename: { type: string }
+        detected_mime: { type: string }
+        size_bytes: { type: integer }
+        sha256: { type: string }
+        duration_ms: { type: [integer, 'null'] }
+        page_count: { type: [integer, 'null'] }
+        language: { type: [string, 'null'] }
+        project_id: { type: [string, 'null'], format: uuid }
+        captured_at: { type: [string, 'null'], format: date-time }
+        thumbnail_file_id: { type: [string, 'null'], format: uuid }
+        used_by_job_count: { type: integer }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    SourceDetail:
+      allOf:
+        - $ref: '#/components/schemas/Source'
+        - type: object
+          properties:
+            files:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { $ref: '#/components/schemas/Uuid' }
+                  role: { type: string, enum: [original, rendition] }
+                  rendition_kind: { type: [string, 'null'] }
+                  mime: { type: string }
+            extractions:
+              type: array
+              items: { $ref: '#/components/schemas/Extraction' }
+    Extraction:
+      type: object
+      required: [id, kind, status, pipeline_version]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        kind: { type: string }
+        status: { type: string, enum: [pending, running, succeeded, failed, superseded] }
+        pipeline_version: { type: string }
+        language: { type: [string, 'null'] }
+        quality: { type: object }
+        error_code: { type: [string, 'null'] }
+    SourceList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Source' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    SignedUrl:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url: { type: string, format: uri }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+
+    # ------------------------------------------------ jobs
+    JobStatus:
+      type: string
+      enum: [draft, ready, queued, processing, needs_review, completed, failed, cancelled]
+    JobCreate:
+      type: object
+      required: [module_key]
+      additionalProperties: false
+      properties:
+        module_key: { $ref: '#/components/schemas/ModuleKey' }
+        title: { type: string, maxLength: 300 }
+        project_id: { $ref: '#/components/schemas/Uuid' }
+        input: { type: object, description: Validated against module job input schema }
+        source_ids:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Uuid' }
+        client_ref: { type: string, maxLength: 64, description: Offline temporary id (tmp_...) echoed back for reconciliation }
+    JobUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 300 }
+        project_id: { type: [string, 'null'], format: uuid }
+        input: { type: object }
+    JobSourceAttach:
+      type: object
+      required: [source_id]
+      additionalProperties: false
+      properties:
+        source_id: { $ref: '#/components/schemas/Uuid' }
+        slot: { type: string, maxLength: 64 }
+        position: { type: integer, minimum: 0 }
+    Job:
+      type: object
+      required: [id, module_key, status, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        module_key: { $ref: '#/components/schemas/ModuleKey' }
+        module_version: { type: [string, 'null'], description: Pinned at submit }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        readiness:
+          type: object
+          properties:
+            ready: { type: boolean }
+            missing: { type: array, items: { type: string } }
+        project_id: { type: [string, 'null'], format: uuid }
+        input: { type: object }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              source_id: { $ref: '#/components/schemas/Uuid' }
+              slot: { type: string }
+              source_status: { type: string }
+        current_run:
+          oneOf:
+            - $ref: '#/components/schemas/ProcessingRun'
+            - type: 'null'
+        review_items_open: { type: integer }
+        artifact_ids: { type: array, items: { $ref: '#/components/schemas/Uuid' } }
+        failure: { oneOf: [{ $ref: '#/components/schemas/Error' }, { type: 'null' }] }
+        created_by: { $ref: '#/components/schemas/Uuid' }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        submitted_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+    JobList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Job' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    ProcessingRun:
+      type: object
+      required: [id, run_no, trigger, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        run_no: { type: integer }
+        trigger: { type: string, enum: [submit, retry, reprocess, additional_artifact] }
+        status: { type: string, enum: [pending, running, waiting_review, succeeded, failed, cancelled] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        stages:
+          type: array
+          description: User-facing stage timeline (not internal step names).
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              label: { $ref: '#/components/schemas/LocalizedString' }
+              status: { type: string, enum: [pending, running, done, failed, skipped, waiting] }
+        started_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+    JobStreamEvent:
+      type: object
+      description: Payload of each SSE `data:` frame (docs/api/sse.md).
+      required: [type, job_id, seq]
+      properties:
+        type:
+          type: string
+          enum: [job.status, run.stage, run.progress, review.required, artifact.generated, export.completed, heartbeat, error]
+        job_id: { $ref: '#/components/schemas/Uuid' }
+        seq: { type: integer }
+        status: { $ref: '#/components/schemas/JobStatus' }
+        stage: { type: string }
+        progress: { type: number }
+        artifact_id: { $ref: '#/components/schemas/Uuid' }
+        at: { $ref: '#/components/schemas/Timestamp' }
+
+    # ------------------------------------------------ knowledge
+    KnowledgeEntity:
+      type: object
+      required: [id, entity_type, review_state, origin]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        entity_type: { type: string }
+        subtype: { type: string }
+        display_text: { type: string }
+        attributes: { type: object }
+        confidence: { type: [number, 'null'], minimum: 0, maximum: 1 }
+        confidence_band: { type: [string, 'null'], enum: [high, medium, low, null] }
+        review_state: { type: string, enum: [ai_generated, human_confirmed, human_modified, rejected, unresolved] }
+        origin: { type: string, enum: [ai, human, system] }
+        evidence_count: { type: integer }
+    KnowledgeRelation:
+      type: object
+      required: [id, relation_type, from_entity_id, to_entity_id]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        relation_type: { type: string }
+        from_entity_id: { $ref: '#/components/schemas/Uuid' }
+        to_entity_id: { $ref: '#/components/schemas/Uuid' }
+        confidence: { type: [number, 'null'] }
+        review_state: { type: string }
+    KnowledgeGraph:
+      type: object
+      required: [entities, relations]
+      properties:
+        entities:
+          type: array
+          items: { $ref: '#/components/schemas/KnowledgeEntity' }
+        relations:
+          type: array
+          items: { $ref: '#/components/schemas/KnowledgeRelation' }
+    Evidence:
+      description: Mirrors docs/api/schemas/evidence.schema.json.
+      type: object
+      required: [id, target, source_id, extraction_id, pointer, support, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        target:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [entity, relation, artifact_field] }
+            id: { $ref: '#/components/schemas/Uuid' }
+            path: { type: string }
+        source_id: { $ref: '#/components/schemas/Uuid' }
+        extraction_id: { $ref: '#/components/schemas/Uuid' }
+        chunk_id: { type: [string, 'null'], format: uuid }
+        pointer:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [time_range, page, bbox, text_span, chunk] }
+          additionalProperties: true
+        quote: { type: string }
+        support: { type: string, enum: [supports, contradicts, context] }
+        confidence: { type: number }
+        status: { type: string, enum: [active, superseded, source_unavailable] }
+    ReviewItem:
+      type: object
+      required: [id, job_id, target_type, target_id, reason, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        job_id: { $ref: '#/components/schemas/Uuid' }
+        target_type: { type: string, enum: [entity, relation, artifact_field] }
+        target_id: { $ref: '#/components/schemas/Uuid' }
+        target_path: { type: string }
+        reason:
+          type: string
+          enum: [low_confidence, missing_evidence, conflicting_sources, ambiguous_speaker, unreadable, schema_gap, policy]
+        severity: { type: string, enum: [info, warning, blocking] }
+        status: { type: string, enum: [open, resolved, dismissed, superseded] }
+        current_value: {}
+        candidates: { type: array, items: {} }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/Evidence' }
+        resolution: { type: [string, 'null'], enum: [confirmed, modified, rejected, null] }
+    ReviewItemList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ReviewItem' }
+    ReviewResolve:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action: { type: string, enum: [confirm, edit, reject, defer] }
+        value: { description: Required when action=edit; validated against the target schema. }
+        comment: { type: string, maxLength: 2000 }
+
+    # ------------------------------------------------ artifacts
+    ArtifactStatus:
+      type: string
+      enum: [draft, in_review, changes_requested, approved, final]
+    Artifact:
+      type: object
+      required: [id, job_id, module_key, artifact_type, title, status, current_version_id, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        job_id: { $ref: '#/components/schemas/Uuid' }
+        project_id: { type: [string, 'null'], format: uuid }
+        module_key: { $ref: '#/components/schemas/ModuleKey' }
+        artifact_type: { type: string }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/ArtifactStatus' }
+        document_number: { type: [string, 'null'] }
+        current_version_id: { $ref: '#/components/schemas/Uuid' }
+        current_version_no: { type: integer }
+        final_version_id: { type: [string, 'null'], format: uuid }
+        has_exports: { type: boolean, description: Derived "Exported" indicator }
+        open_warnings: { type: integer }
+        language: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    ArtifactWithContent:
+      allOf:
+        - $ref: '#/components/schemas/Artifact'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: object
+              description: Artifact content envelope (docs/api/schemas/artifact.schema.json).
+    ArtifactList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Artifact' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    ArtifactEdit:
+      type: object
+      additionalProperties: false
+      description: Either a full content replacement or a JSON Patch (RFC 6902) against the current version content.
+      properties:
+        content: { type: object }
+        patch:
+          type: array
+          items:
+            type: object
+            required: [op, path]
+            properties:
+              op: { type: string, enum: [add, remove, replace, move, copy, test] }
+              path: { type: string }
+              from: { type: string }
+              value: {}
+        change_summary: { type: string, maxLength: 500 }
+        apply_to_knowledge: { type: boolean, default: true }
+      oneOf:
+        - required: [content]
+        - required: [patch]
+    ArtifactVersion:
+      type: object
+      required: [id, artifact_id, version_no, origin, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        artifact_id: { $ref: '#/components/schemas/Uuid' }
+        version_no: { type: integer }
+        parent_version_id: { type: [string, 'null'], format: uuid }
+        origin: { type: string, enum: [ai, human, system] }
+        created_by: { $ref: '#/components/schemas/Actor' }
+        change_summary: { type: string }
+        content_schema_ref: { type: string }
+        content: { type: object }
+        provenance: { type: object }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    ArtifactVersionList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ArtifactVersion' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    ExportRequest:
+      type: object
+      required: [format]
+      additionalProperties: false
+      properties:
+        format: { type: string, enum: [pdf, docx] }
+        version_id: { $ref: '#/components/schemas/Uuid' }
+        template_key: { type: string }
+        locale: { type: string }
+    ArtifactExport:
+      type: object
+      required: [id, artifact_id, version_id, format, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        artifact_id: { $ref: '#/components/schemas/Uuid' }
+        version_id: { $ref: '#/components/schemas/Uuid' }
+        format: { type: string, enum: [pdf, docx] }
+        status: { type: string, enum: [pending, rendering, succeeded, failed] }
+        download_url: { type: [string, 'null'], format: uri }
+        download_expires_at: { type: [string, 'null'], format: date-time }
+        error: { oneOf: [{ $ref: '#/components/schemas/Error' }, { type: 'null' }] }
+    WorkflowInstance:
+      type: object
+      required: [id, subject_type, subject_id, subject_version_id, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        workflow_key: { type: string }
+        subject_type: { type: string, enum: [artifact] }
+        subject_id: { $ref: '#/components/schemas/Uuid' }
+        subject_version_id: { $ref: '#/components/schemas/Uuid' }
+        status: { type: string, enum: [active, completed_approved, completed_rejected, changes_requested, cancelled, superseded] }
+        current_stage: { type: [string, 'null'] }
+        requests:
+          type: array
+          items: { $ref: '#/components/schemas/ApprovalRequest' }
+    ApprovalRequest:
+      type: object
+      required: [id, instance_id, stage_key, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        instance_id: { $ref: '#/components/schemas/Uuid' }
+        artifact_id: { $ref: '#/components/schemas/Uuid' }
+        artifact_version_id: { $ref: '#/components/schemas/Uuid' }
+        stage_key: { type: string }
+        approver: { $ref: '#/components/schemas/Actor' }
+        status: { type: string, enum: [pending, approved, rejected, changes_requested, cancelled, expired, superseded] }
+        due_at: { type: [string, 'null'], format: date-time }
+        decided_at: { type: [string, 'null'], format: date-time }
+    ApprovalRequestList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ApprovalRequest' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    ApprovalDecisionCreate:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [approve, reject, request_changes] }
+        comment: { type: string, maxLength: 4000 }
+        artifact_version_id:
+          $ref: '#/components/schemas/Uuid'
+          description: Must equal the request's version; guards against deciding on a superseded version.
+
+    # ------------------------------------------------ templates
+    Template:
+      type: object
+      required: [id, key, artifact_type, status, source]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        key: { type: string }
+        name: { type: string }
+        artifact_type: { type: string }
+        module_key: { type: [string, 'null'] }
+        source: { type: string, enum: [module, organization] }
+        status: { type: string, enum: [active, draft, retired] }
+        current_version: { type: integer }
+    TemplateCreate:
+      type: object
+      required: [key, name, artifact_type]
+      additionalProperties: false
+      properties:
+        key: { type: string, pattern: '^[a-z][a-z0-9-]{1,63}$' }
+        name: { type: string, maxLength: 200 }
+        artifact_type: { type: string }
+        module_key: { $ref: '#/components/schemas/ModuleKey' }
+        based_on_template_key: { type: string }
+        definition: { type: object, description: Format per OD-038 }
+    BrandKit:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer }
+        logo_file_id: { type: [string, 'null'], format: uuid }
+        fonts: { type: object }
+        colors: { type: object }
+        header: { type: object }
+        footer: { type: object }
+        signatures: { type: array, items: { type: object } }
+        page_numbering: { type: object }
+    BrandKitUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        logo_source_id: { $ref: '#/components/schemas/Uuid' }
+        fonts: { type: object }
+        colors: { type: object }
+        header: { type: object }
+        footer: { type: object }
+        signatures: { type: array, items: { type: object } }
+        page_numbering: { type: object }
+
+    # ------------------------------------------------ actions
+    ActionStatus:
+      type: string
+      enum: [open, in_progress, resolved, cancelled]
+    ActionItem:
+      type: object
+      required: [id, title, status, is_overdue, origin]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/ActionStatus' }
+        is_overdue: { type: boolean }
+        owner_membership_id: { type: [string, 'null'], format: uuid }
+        owner_text: { type: [string, 'null'] }
+        due_date: { type: [string, 'null'], format: date }
+        due_text_original: { type: [string, 'null'] }
+        severity: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        job_id: { type: [string, 'null'], format: uuid }
+        artifact_id: { type: [string, 'null'], format: uuid }
+        knowledge_entity_id: { type: [string, 'null'], format: uuid }
+        project_id: { type: [string, 'null'], format: uuid }
+        origin: { type: string, enum: [ai, human, system] }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    ActionItemCreate:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 500 }
+        description: { type: string, maxLength: 5000 }
+        owner_membership_id: { $ref: '#/components/schemas/Uuid' }
+        due_date: { type: string, format: date }
+        project_id: { $ref: '#/components/schemas/Uuid' }
+    ActionItemUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 500 }
+        status: { $ref: '#/components/schemas/ActionStatus' }
+        owner_membership_id: { type: [string, 'null'], format: uuid }
+        due_date: { type: [string, 'null'], format: date }
+        resolution_note: { type: string, maxLength: 5000 }
+        resolution_source_ids: { type: array, items: { $ref: '#/components/schemas/Uuid' } }
+    ActionItemList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ActionItem' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+
+    # ------------------------------------------------ billing / audit / integrations
+    UsageSummary:
+      type: object
+      required: [period_start, period_end, meters]
+      properties:
+        period_start: { $ref: '#/components/schemas/Timestamp' }
+        period_end: { $ref: '#/components/schemas/Timestamp' }
+        meters:
+          type: array
+          description: Customer-facing units only (AI Credits, processing minutes, pages, storage). Never tokens.
+          items:
+            type: object
+            required: [key, unit, used]
+            properties:
+              key: { type: string, enum: [ai_credits, processing_minutes, pages, storage_gb, seats, exports] }
+              unit: { type: string }
+              used: { type: number }
+              included: { type: [number, 'null'] }
+              soft_limit: { type: [number, 'null'] }
+              hard_limit: { type: [number, 'null'] }
+              overage: { type: number }
+        by_module:
+          type: array
+          items:
+            type: object
+            properties:
+              module_key: { $ref: '#/components/schemas/ModuleKey' }
+              ai_credits: { type: number }
+    Subscription:
+      type: object
+      required: [plan_key, status, seats]
+      properties:
+        plan_key: { type: string }
+        plan_name: { type: string }
+        plan_version: { type: integer }
+        status: { type: string, enum: [trialing, active, past_due, cancelled, expired] }
+        seats: { type: integer }
+        seats_used: { type: integer }
+        addons: { type: array, items: { type: string } }
+        current_period_end: { $ref: '#/components/schemas/Timestamp' }
+        entitlements:
+          type: array
+          items:
+            type: object
+            required: [key]
+            properties:
+              key: { type: string }
+              value: {}
+              source: { type: string, enum: [plan, addon, contract, override, trial, promotion] }
+    AuditEvent:
+      type: object
+      required: [id, occurred_at, actor, action, resource_type, outcome]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        occurred_at: { $ref: '#/components/schemas/Timestamp' }
+        actor: { $ref: '#/components/schemas/Actor' }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: [string, 'null'], format: uuid }
+        outcome: { type: string, enum: [success, denied, failure] }
+        request_id: { type: string }
+        changes: { type: object }
+        metadata: { type: object }
+    AuditEventList:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        page: { $ref: '#/components/schemas/PageInfo' }
+    ApiKey:
+      type: object
+      required: [id, name, prefix, scopes, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        prefix: { type: string }
+        scopes: { type: array, items: { type: string } }
+        last_used_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    ApiKeyCreate:
+      type: object
+      required: [name, scopes]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 120 }
+        scopes:
+          type: array
+          minItems: 1
+          items: { type: string, pattern: '^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*:(read|write)$' }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+    ApiKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          required: [secret]
+          properties:
+            secret: { type: string, description: Shown once; never retrievable again. }
+    WebhookEndpoint:
+      type: object
+      required: [id, url, event_types, status]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        url: { type: string, format: uri }
+        description: { type: string }
+        event_types: { type: array, items: { type: string } }
+        status: { type: string, enum: [active, disabled, failing] }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+    WebhookEndpointCreate:
+      type: object
+      required: [url, event_types]
+      additionalProperties: false
+      properties:
+        url: { type: string, format: uri, pattern: '^https://' }
+        description: { type: string, maxLength: 500 }
+        event_types:
+          type: array
+          minItems: 1
+          items: { type: string, pattern: '^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_*]*){1,3}$' }
+    WebhookEndpointCreated:
+      allOf:
+        - $ref: '#/components/schemas/WebhookEndpoint'
+        - type: object
+          required: [signing_secret]
+          properties:
+            signing_secret: { type: string, description: Shown once. }

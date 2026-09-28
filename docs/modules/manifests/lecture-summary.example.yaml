@@ -1,0 +1,245 @@
+# Example manifest — education.lecture-summary
+# Validates against docs/api/schemas/module-manifest.schema.json (manifestVersion 1.0).
+manifestVersion: "1.0"
+
+module:
+  key: education.lecture-summary
+  version: 1.0.0
+  publisher: clerk-official
+  category: education
+  name:
+    en: Lecture Summary
+    fa: خلاصه درس
+  description:
+    en: Turn lecture recordings, slides and notes into grounded study material — summary, concepts, definitions, examples, questions and flashcards.
+    fa: تبدیل صدای کلاس، اسلایدها و یادداشت‌ها به خلاصه، مفاهیم، تعاریف، مثال‌ها، سؤالات و فلش‌کارت.
+  icon: assets/icon.svg
+  tags: [education, lecture, study]
+  license: proprietary
+
+runtime:
+  type: declarative
+
+compatibility:
+  platform: ">=1.0.0 <2.0.0"
+
+capabilities:
+  - source.transcription
+  - source.slide_parse
+  - source.document_parse
+  - source.ocr
+  - source.video_frames
+  - ai.structured_extraction
+  - ai.generation
+  - knowledge.fusion
+  - knowledge.retrieval
+  - artifact.export.pdf
+  - artifact.export.docx
+
+inputs:
+  manualText: true
+  slots:
+    - key: lecture_media
+      label: { en: Lecture recording, fa: فایل صوتی یا ویدیویی درس }
+      accepts: [audio, video]
+      requiredExtractions: [normalized_audio, transcript, language, frames]
+      capture: [upload, record_audio, record_video]
+    - key: slides
+      label: { en: Slides, fa: اسلایدها }
+      accepts: [presentation, document]
+      requiredExtractions: [slides, text, layout]
+      capture: [upload]
+    - key: materials
+      label: { en: "Handouts, images and notes", fa: "جزوه، تصویر و یادداشت" }
+      accepts: [document, image, text]
+      requiredExtractions: [text, ocr, handwriting_ocr]
+      capture: [upload, camera, text]
+  limits:
+    maxSources: 40
+    maxTotalDurationSeconds: 14400
+    maxTotalPages: 500
+  readiness:
+    minSources: 1
+    requireAnyOfSlots: [lecture_media, slides, materials]
+  autoSubmit: false
+
+configuration:
+  schema: schemas/configuration.schema.json
+  scopes: [organization, team]
+  defaults:
+    groundingMode: source_grounded
+    summaryLength: standard
+    flashcardCount: 20
+    questionTypes: [recall, conceptual]
+    language: auto
+
+jobInput:
+  schema: schemas/job-input.schema.json
+  uiSchema: schemas/job-input.ui.json
+
+knowledge:
+  schema: schemas/knowledge.schema.json
+  entityTypes:
+    - key: lecture.topic
+      baseType: document_section
+      label: { en: Topic, fa: سرفصل }
+      evidence: recommended
+    - key: lecture.concept
+      baseType: concept
+      label: { en: Concept, fa: مفهوم }
+      evidence: required
+      review: { confidenceThreshold: 0.75, blocksFinalization: false }
+    - key: lecture.definition
+      baseType: definition
+      label: { en: Definition, fa: تعریف }
+      evidence: required
+      review: { confidenceThreshold: 0.8, blocksFinalization: false }
+    - key: lecture.example
+      baseType: other
+      label: { en: Example, fa: مثال }
+      evidence: required
+    - key: lecture.key_point
+      baseType: other
+      label: { en: Key point, fa: نکته کلیدی }
+      evidence: required
+    - key: lecture.question
+      baseType: question
+      label: { en: Question, fa: سؤال }
+      evidence: recommended
+    - key: lecture.formula
+      baseType: other
+      label: { en: Formula, fa: فرمول }
+      evidence: required
+      review: { confidenceThreshold: 0.9, blocksFinalization: false }
+  relationTypes:
+    - { key: DEFINES, from: [lecture.definition], to: [lecture.concept], cardinality: many_to_many }
+    - { key: EXEMPLIFIES, from: [lecture.example], to: [lecture.concept], cardinality: many_to_many }
+    - { key: PREREQUISITE_OF, from: [lecture.concept], to: [lecture.concept], cardinality: many_to_many }
+    - { key: PART_OF, from: [lecture.concept, lecture.key_point], to: [lecture.topic], cardinality: many_to_many }
+    - { key: RELATED_TO, from: [lecture.concept], to: [lecture.concept], cardinality: many_to_many }
+    - { key: TESTS, from: [lecture.question], to: [lecture.concept], cardinality: many_to_many }
+
+artifacts:
+  - type: lecture_summary
+    name: { en: Lecture summary, fa: خلاصه درس }
+    schema: schemas/artifacts/lecture-summary.schema.json
+    schemaVersion: 1.0.0
+    primary: true
+    generation: automatic
+    templates:
+      - { key: lecture-summary-default, path: templates/lecture-summary, default: true }
+    exports: [pdf, docx]
+  - type: study_notes
+    name: { en: Study notes, fa: جزوه مطالعه }
+    schema: schemas/artifacts/study-notes.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: study-notes-default, path: templates/study-notes, default: true }
+    exports: [pdf, docx]
+  - type: flashcards
+    name: { en: Flashcards, fa: فلش‌کارت }
+    schema: schemas/artifacts/flashcards.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: flashcards-print, path: templates/flashcards-print, default: true }
+    exports: [pdf]
+  - type: question_set
+    name: { en: Review questions, fa: سؤالات مرور }
+    schema: schemas/artifacts/question-set.schema.json
+    schemaVersion: 1.0.0
+    generation: on_demand
+    templates:
+      - { key: question-set-default, path: templates/question-set, default: true }
+    exports: [pdf, docx]
+
+workflows:
+  processing:
+    - { key: lecture-processing, definition: workflows/processing.yaml, default: true, purpose: job }
+    - { key: lecture-additional-artifact, definition: workflows/additional-artifact.yaml, purpose: additional_artifact }
+
+permissions:
+  - key: education.lecture-summary.create
+    description: { en: Create lecture summary jobs, fa: ایجاد خلاصه درس }
+    defaultRoles: [owner, admin, manager, member]
+  - key: education.lecture-summary.view
+    description: { en: View lecture summaries within scope, fa: مشاهده خلاصه درس }
+    defaultRoles: [owner, admin, manager, member, viewer, guest]
+  - key: education.lecture-summary.edit
+    description: { en: Edit lecture summaries, fa: ویرایش خلاصه درس }
+    defaultRoles: [owner, admin, manager, member]
+
+entitlements:
+  required: [module.education.lecture-summary]
+  features:
+    - { key: export.docx, gates: ["export:docx"] }
+  meters: [audio.transcription, video.processing, ocr, vision, llm.input, llm.output, artifact.export, module.execution]
+
+ai:
+  tasks:
+    - key: transcribe
+      capability: transcription
+      profile: persian_transcription
+      quality: high
+      languages: [fa, en]
+      modalities: [audio]
+    - key: align_slides
+      capability: structured_extraction
+      profile: standard_extraction
+      modalities: [text, image]
+      prompt: lecture.slide-alignment@^1.0.0
+      outputSchema: schemas/ai/slide-alignment.schema.json
+    - key: extract_concepts
+      capability: structured_extraction
+      profile: high_quality_extraction
+      quality: high
+      languages: [fa, en]
+      modalities: [text]
+      prompt: lecture.concept-extraction@^1.0.0
+      outputSchema: schemas/ai/concepts.schema.json
+      requiresEvidence: true
+    - key: generate_study_material
+      capability: generation
+      profile: standard_generation
+      languages: [fa, en]
+      modalities: [text]
+      prompt: lecture.study-material@^1.0.0
+      outputSchema: schemas/ai/study-material.schema.json
+      requiresEvidence: true
+
+evaluation:
+  suites:
+    - key: lecture-core
+      dataset: lecture-summary-golden@^1.0.0
+      tasks: [extract_concepts, generate_study_material]
+      metrics:
+        - { key: concept.recall, min: 0.80 }
+        - { key: definition.accuracy, min: 0.85 }
+        - { key: evidence.coverage, min: 0.90 }
+        - { key: hallucination.out_of_source_claim_rate, max: 0.03 }
+        - { key: flashcard.answerable_from_source_rate, min: 0.95 }
+      releaseGate: true
+
+review:
+  defaultConfidenceThreshold: 0.75
+  bands: { high: 0.85, medium: 0.6 }
+
+ui:
+  mode: hybrid
+  card: { icon: assets/card.svg, accent: violet, order: 40 }
+  labels:
+    job: { en: Lecture, fa: جلسه درس }
+  extensions:
+    - { point: artifact.view, component: artifact.flashcards-viewer, fallback: generic }
+    - { point: artifact.section, component: artifact.concept-map, fallback: hidden }
+
+telemetry:
+  metrics:
+    - { key: lecture.concepts_extracted, type: histogram, unit: count }
+    - { key: lecture.flashcards_generated, type: histogram, unit: count }
+  kpis: [time_to_artifact, acceptance_rate, human_correction_rate, evidence_coverage, module_activation]
+
+translations:
+  directory: translations
+  locales: [en, fa]
